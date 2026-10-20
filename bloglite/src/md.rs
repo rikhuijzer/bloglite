@@ -306,36 +306,63 @@ pub fn extract_html_title(post: &Post) -> String {
     }
 }
 
+/// Extract readable text while preserving separation between Markdown blocks.
+fn description_text(node: &Node) -> String {
+    match node {
+        Node::Html(_)
+        | Node::Definition(_)
+        | Node::FootnoteDefinition(_)
+        | Node::FootnoteReference(_) => String::new(),
+        Node::Image(image) => image.alt.clone(),
+        Node::ImageReference(image) => image.alt.clone(),
+        Node::Break(_) | Node::ThematicBreak(_) => " ".to_string(),
+        _ => {
+            // Keep link text without hrefs for readable meta descriptions;
+            // full links remain in the article and RSS HTML.
+            let mut text = if let Some(children) = node.children() {
+                children.iter().map(description_text).collect::<String>()
+            } else {
+                node.to_string()
+            };
+            if matches!(
+                node,
+                Node::Paragraph(_)
+                    | Node::Heading(_)
+                    | Node::Code(_)
+                    | Node::Math(_)
+                    | Node::TableCell(_)
+                    | Node::TableRow(_)
+            ) {
+                text.push(' ');
+            }
+            text
+        }
+    }
+}
+
 /// Description for the meta description and Open Graph description.
 pub fn extract_html_description(post: &Post) -> String {
-    let content = &post.content;
-    // This also would make a post with a single word on the first line have
-    // that as the title which I guess makes sense.
-    let lines = content.lines().collect::<Vec<&str>>();
-    let has_title = lines.first().unwrap().starts_with("# ");
-    let description = if has_title {
-        lines[1..].join("\n")
-    } else {
-        lines.join("\n")
-    };
-    let description = remove_urls(&description);
-    let mut description = description
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\n", " ")
-        .replace("'", "&apos;")
-        .replace("\"", "&quot;");
-    while description.contains("  ") {
-        description = description.replace("  ", " ");
+    let tree = to_mdast(&post.content, &parse_options()).unwrap();
+    let mut nodes = tree.children().unwrap().iter().peekable();
+    if matches!(nodes.peek(), Some(Node::Heading(heading)) if heading.depth == 1) {
+        nodes.next();
     }
+    let description = nodes.map(description_text).collect::<String>();
+    let description = description.split_whitespace().collect::<Vec<_>>().join(" ");
     // Better a bit too long than too short. Google truncates anyway.
     let max_length = 200;
-    if description.len() <= max_length {
+    let description = if description.len() <= max_length {
         description
     } else {
         format!("{}...", truncate(&description, max_length))
-    }
+    };
+    // Escape after truncation so HTML entities cannot be cut in half.
+    description
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("'", "&apos;")
+        .replace("\"", "&quot;")
 }
 
 #[test]
@@ -357,6 +384,51 @@ fn test_extract_html_description() {
     };
     let description = extract_html_description(&post);
     assert_eq!(description, "lorem &amp; ipsum");
+}
+
+#[test]
+fn test_description_interprets_markdown() {
+    let mut post = Post {
+        id: 0,
+        content: String::new(),
+        created: chrono::Utc::now(),
+        updated: chrono::Utc::now(),
+    };
+    for (content, expected) in [
+        (
+            "# Title\n\nlike _this_ and **that** with `code`",
+            "like this and that with code",
+        ),
+        (
+            "[a **bold** link](/path) and [reference][ref]\n\n[ref]: https://example.com",
+            "a bold link and reference",
+        ),
+        (
+            "First paragraph.\n\nSecond paragraph.\n\n- One\n- Two",
+            "First paragraph. Second paragraph. One Two",
+        ),
+        ("Line  \nbreak", "Line break"),
+        ("![Alt text](/image.png) <em>hello</em>", "Alt text hello"),
+        (
+            "&amp; \"quoted\" < 'text'",
+            "&amp; &quot;quoted&quot; &lt; &apos;text&apos;",
+        ),
+        ("", ""),
+        ("# Title", ""),
+    ] {
+        post.content = content.to_string();
+        assert_eq!(extract_html_description(&post), expected, "{content}");
+    }
+    post.content = format!("{}&", "é".repeat(99));
+    assert_eq!(
+        extract_html_description(&post),
+        format!("{}&amp;", "é".repeat(99))
+    );
+    post.content = "é".repeat(101);
+    assert_eq!(
+        extract_html_description(&post),
+        format!("{}...", "é".repeat(100))
+    );
 }
 
 /// Extract a slug (a short URL suffix to clarify the post) from the post.
