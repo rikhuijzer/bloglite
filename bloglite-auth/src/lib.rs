@@ -112,7 +112,12 @@ pub fn handle_logout(jar: CookieJar) -> CookieJar {
     jar.remove(Cookie::from("auth"))
 }
 
-const MAX_AGE_SEC: i64 = 2 * 60 * 60 * 24 * 7; // 2 weeks.
+// A 30-day lifetime balances convenience and security. Unlike standard
+// implementations, a stolen token remains valid even after the user logs out,
+// because logout only removes the browser's cookie. However, since the user is
+// also the server admin, he or she can invalidate all existing tokens by
+// changing the configured password and restarting the server.
+const MAX_AGE_SEC: i64 = 30 * 24 * 60 * 60; // 30 days.
 
 fn session_is_valid(plaintext: &str, now: DateTime<Utc>) -> bool {
     let Ok(issued) = DateTime::parse_from_rfc3339(plaintext) else {
@@ -149,7 +154,7 @@ fn session_expiry_boundaries() {
 #[test]
 fn rejects_date_only_cookies() {
     // Old cookies stored only the login date. Reject that format so users must
-    // log in again and receive a timestamped cookie with two-week expiry.
+    // log in again and receive a timestamped cookie with 30-day expiry.
     let now = DateTime::parse_from_rfc3339("2026-09-01T12:34:56Z")
         .unwrap()
         .with_timezone(&Utc);
