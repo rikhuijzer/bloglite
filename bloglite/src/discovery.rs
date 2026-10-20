@@ -7,6 +7,7 @@ use crate::serve::response;
 use crate::settings::Settings;
 use axum::Router;
 use axum::body::Body;
+use axum::extract::Query;
 use axum::extract::State;
 use axum::http::HeaderMap;
 use axum::http::Response;
@@ -46,8 +47,8 @@ fn rss_item(post: &Post, base: &str) -> Option<String> {
     }
 
     let title = escape_xml(&crate::md::extract_html_title(post));
-    let description = &crate::md::extract_rss_description(post);
-    let url = format!("{base}/posts/{}", post.id);
+    let description = crate::md::extract_rss_description(post).replace("]]>", "]]]]><![CDATA[>");
+    let url = escape_xml(&format!("{base}/posts/{}", post.id));
     let created = rfc822_datetime(&post.created);
     Some(format!(
         "
@@ -74,7 +75,15 @@ fn test_deleted_post_is_excluded_from_rss() {
     assert_eq!(rss_item(&post, "https://example.com"), None);
 }
 
-async fn rss(ctx: &ServerContext, posts: &[Post]) -> String {
+fn feed_url(base: &str, page: usize) -> String {
+    if page == 1 {
+        format!("{base}/feed.xml")
+    } else {
+        format!("{base}/feed.xml?page={page}")
+    }
+}
+
+async fn rss(ctx: &ServerContext, posts: &[Post], page: usize, has_next: bool) -> String {
     let settings = Settings::from_db(&ctx.conn()).unwrap();
     let site_name = escape_xml(&settings.site_name);
     let author_name = escape_xml(&settings.author_name);
@@ -84,15 +93,23 @@ async fn rss(ctx: &ServerContext, posts: &[Post]) -> String {
     body.push_str("<rss version=\"2.0\" xmlns:atom=\"http://www.w3.org/2005/Atom\">\n");
     body.push_str("<channel>\n");
     body.push_str(&format!("<title>{site_name}</title>\n"));
-    body.push_str(&format!("<link>{base}</link>\n"));
+    body.push_str(&format!("<link>{}</link>\n", escape_xml(&base)));
     body.push_str(&format!(
         "<description>Posts by {author_name}</description>\n"
     ));
-    let atom_link = format!("{base}/feed.xml");
-    body.push_str(&format!(
-        "<atom:link rel=\"self\" href=\"{atom_link}\" \
-      type=\"application/rss+xml\"/>\n"
-    ));
+    let mut links = vec![("self", page), ("first", 1)];
+    if page > 1 {
+        links.push(("previous", page - 1));
+    }
+    if has_next {
+        links.push(("next", page + 1));
+    }
+    for (rel, page) in links {
+        let href = escape_xml(&feed_url(&base, page));
+        body.push_str(&format!(
+            "<atom:link rel=\"{rel}\" href=\"{href}\" type=\"application/rss+xml\"/>\n"
+        ));
+    }
     for post in posts {
         if let Some(entry) = rss_item(post, &base) {
             body.push_str(&entry);
@@ -100,12 +117,30 @@ async fn rss(ctx: &ServerContext, posts: &[Post]) -> String {
     }
     body.push_str("</channel>\n");
     body.push_str("</rss>\n");
-    crate::html::minify(&body)
+    // Preserve whitespace in full post HTML, including preformatted text.
+    body
 }
 
-async fn get_rss(State(ctx): State<ServerContext>) -> Response<Body> {
+#[derive(serde::Deserialize)]
+struct FeedPagination {
+    page: Option<usize>,
+}
+
+async fn get_rss(
+    State(ctx): State<ServerContext>,
+    Query(pagination): Query<FeedPagination>,
+) -> Response<Body> {
     let posts = Post::list(&ctx.conn()).unwrap();
-    let body = rss(&ctx, &posts).await;
+    let page = pagination.page.unwrap_or(1);
+    let page_size = 20;
+    let Some(start) = page.checked_sub(1).and_then(|p| p.checked_mul(page_size)) else {
+        return crate::serve::not_found(State(ctx)).await;
+    };
+    if page > 1 && start >= posts.len() {
+        return crate::serve::not_found(State(ctx)).await;
+    }
+    let end = start.saturating_add(page_size).min(posts.len());
+    let body = rss(&ctx, &posts[start..end], page, end < posts.len()).await;
     let mut headers = HeaderMap::new();
     // Forces download in Firefox unfortunately:
     // https://www.petefreitag.com/blog/content-type-xml-feeds/

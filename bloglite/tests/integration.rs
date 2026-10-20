@@ -516,8 +516,87 @@ async fn test_rss() {
     assert_eq!(status, StatusCode::OK);
     println!("body:\n{body}");
     assert!(body.starts_with("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"));
-    assert!(body.contains("<description><![CDATA[<p><a href='https://example.com"),);
+    assert!(body.contains("<description><![CDATA[<p><a href=\"https://example.com"),);
     assert!(body.contains("<description><![CDATA[<h1>Code</h1>"));
+}
+
+#[tokio::test]
+async fn test_full_rss_pages() {
+    let mut ctx = server_context().await;
+    ctx.args.domain = "example.com".to_string();
+    ctx.conn().execute("DELETE FROM posts", []).unwrap();
+    let now = chrono::Utc::now();
+    let content = format!(
+        "# Full post\n\n{}\n\n**The end**\n\n<pre>  first\n\n    second</pre>\n\n<!-- ]]> -->",
+        "Long paragraph. ".repeat(100)
+    );
+    let mut ids = Vec::new();
+    for index in 0..41 {
+        let created = now + chrono::Duration::seconds(index);
+        ids.push(bloglite::data::Post::insert(&ctx.conn(), created, created, &content).unwrap());
+    }
+    // Deleted posts should not consume a page slot.
+    bloglite::data::Post::delete(&ctx.conn(), ids[20]).unwrap();
+    let router = app(ctx.clone());
+    for (uri, count, previous, next, first_id, last_id) in [
+        ("/feed.xml", 20, false, true, ids[40], ids[21]),
+        ("/feed.xml?page=1", 20, false, true, ids[40], ids[21]),
+        ("/feed.xml?page=2", 20, true, false, ids[19], ids[0]),
+    ] {
+        let req = Request::builder().uri(uri).body(Body::empty()).unwrap();
+        let response = router.clone().oneshot(req).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers()["content-type"],
+            "application/rss+xml; charset=utf-8"
+        );
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert_eq!(body.matches("<item>").count(), count);
+        assert_eq!(body.contains("rel=\"previous\""), previous);
+        assert_eq!(body.contains("rel=\"next\""), next);
+        let self_url = if previous {
+            "https://example.com/feed.xml?page=2"
+        } else {
+            "https://example.com/feed.xml"
+        };
+        assert!(body.contains(&format!("rel=\"self\" href=\"{self_url}\"")));
+        if next {
+            assert!(body.contains("rel=\"next\" href=\"https://example.com/feed.xml?page=2\""));
+        }
+        assert!(body.contains(&format!(
+            "<guid>https://example.com/posts/{first_id}</guid>"
+        )));
+        assert!(body.contains(&format!("<guid>https://example.com/posts/{last_id}</guid>")));
+        assert_eq!(body.matches("<strong>The end</strong>").count(), count);
+        assert!(body.contains("<pre>  first\n\n    second</pre>"));
+        assert!(body.contains("<!-- ]]]]><![CDATA[> -->"));
+        assert!(!body.contains("Show more"));
+    }
+    for (page, status) in [
+        ("0".to_string(), StatusCode::NOT_FOUND),
+        ("3".to_string(), StatusCode::NOT_FOUND),
+        (usize::MAX.to_string(), StatusCode::NOT_FOUND),
+        ("abc".to_string(), StatusCode::BAD_REQUEST),
+        ("-1".to_string(), StatusCode::BAD_REQUEST),
+    ] {
+        let req = Request::builder()
+            .uri(format!("/feed.xml?page={page}"))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(router.clone().oneshot(req).await.unwrap().status(), status);
+    }
+    ctx.conn().execute("DELETE FROM posts", []).unwrap();
+    let req = Request::builder()
+        .uri("/feed.xml")
+        .body(Body::empty())
+        .unwrap();
+    let response = router.oneshot(req).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(body.to_vec()).unwrap();
+    assert!(!body.contains("<item>"));
+    assert!(!body.contains("rel=\"next\""));
 }
 
 #[tokio::test]

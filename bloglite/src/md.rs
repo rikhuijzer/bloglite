@@ -407,9 +407,6 @@ fn test_extract_slug() {
 /// Many readers expect the description to be the full post, see for example,
 /// <https://stackoverflow.com/a/7369487/5056635>.
 pub fn extract_rss_description(post: &Post) -> String {
-    let mut post = post.clone();
-    // Should not truncate the post, but instead implement feed pages.
-    preview(&mut post, 600);
     content_to_html(&post.content)
 }
 
