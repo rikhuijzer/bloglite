@@ -6,6 +6,7 @@ mod files;
 pub mod health;
 mod highlight;
 pub mod html;
+mod math;
 mod md;
 mod search;
 pub mod serve;

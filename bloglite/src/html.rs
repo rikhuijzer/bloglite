@@ -499,29 +499,6 @@ async fn about(ctx: &ServerContext, settings: &PageSettings) -> String {
     )
 }
 
-fn katex_head(body: &str) -> String {
-    let has_math = body.contains("<code class=\"language-math");
-    let prefix = "https://cdn.jsdelivr.net/npm/katex@0.16.22/dist";
-    if has_math {
-        format!(
-            "
-            <link rel='stylesheet' href='{prefix}/katex.min.css' \
-              crossorigin='anonymous'>
-            <script defer src='{prefix}/katex.min.js' \
-              crossorigin='anonymous'>
-            </script>
-            <script defer src='{prefix}/contrib/auto-render.min.js' \
-              crossorigin='anonymous'>
-            </script>
-            <script defer src='/static/katex.js'>
-            </script>
-            "
-        )
-    } else {
-        "".to_string()
-    }
-}
-
 fn highlight_head(body: &str) -> &'static str {
     if body.contains("syntax-code") {
         "<link rel='stylesheet' href='/static/highlight.css'>"
@@ -582,7 +559,7 @@ pub async fn page(ctx: &ServerContext, settings: &PageSettings, body: &str) -> S
         Some(label) => format!("{package_version} ({label})"),
     };
     let highlight = highlight_head(body);
-    let katex = katex_head(body);
+
     let og_title = if settings.title.is_empty() {
         &site_name
     } else {
@@ -610,7 +587,6 @@ pub async fn page(ctx: &ServerContext, settings: &PageSettings, body: &str) -> S
             <meta property='og:description' content='{description}'/>
             <meta property='og:site_name' content='{site_name}'/>
             <meta property='og:title' content='{og_title}'/>
-            {katex}
             {highlight}
             {extra_head}
         </head>

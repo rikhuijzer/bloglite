@@ -116,7 +116,7 @@ mod tests {
                 opts
             })
             .unwrap();
-            assert_eq!(crate::md::content_to_html(source), expected);
+            assert_eq!(super::html(&expected), expected);
         }
     }
 

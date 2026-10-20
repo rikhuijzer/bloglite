@@ -161,7 +161,8 @@ async fn test_home() {
     // Assumes that the "Code" post shows a code block in the preview.
     assert!(body.contains("/static/highlight.css"));
     // Assumes that math is shown in one of the previews.
-    assert!(body.contains("katex"));
+    assert!(body.contains("<math"));
+    assert!(!body.contains("katex"));
 }
 
 #[tokio::test]

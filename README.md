@@ -11,7 +11,7 @@ A Twitter/Bluesky-like (micro)blogging service that you can self-host.
 - 🚀 Low costs due to small footprint (only a few MB of memory are required).
 - 📝 Write posts in Markdown.
 - 🖥 Built-in syntax highlighting.
-- ∑ Built-in display for math expressions (LaTeX syntax, e.g. `$E=mc^2$`).
+- ∑ Server-side MathML rendering for math expressions (LaTeX syntax, e.g. `$E=mc^2$`).
 - 📱 Publish and edit from desktop or mobile device.
 - 📁 Upload files and images to embed them in posts.
 - 🔒 Automatically backup to plain text files, see [Backup](#backup).

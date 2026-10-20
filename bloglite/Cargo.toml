@@ -35,6 +35,7 @@ toml = "1.1"
 two-face = { version = "0.5", default-features = false, features = ["syntect-fancy"] }
 tracing = "0.1"
 xz2 = "0.1"
+math-core = "0.7.0"
 
 # For the `axum::debug_handler` enable "macros".
 [dependencies.axum]
