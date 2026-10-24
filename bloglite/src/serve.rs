@@ -37,14 +37,16 @@ use serde::Serialize;
 #[derive(Clone)]
 pub struct ServerContext {
     pub args: ServeArgs,
+    pub password: String,
     pub pool: DbPool,
     pub salt: Salt,
 }
 
 impl ServerContext {
-    pub async fn new(args: ServeArgs, pool: DbPool, salt: Salt) -> Self {
+    pub async fn new(args: ServeArgs, password: String, pool: DbPool, salt: Salt) -> Self {
         Self {
-            args: args.clone(),
+            args,
+            password,
             pool,
             salt,
         }
@@ -146,16 +148,9 @@ where
 }
 
 pub fn is_logged_in(ctx: &ServerContext, jar: &CookieJar) -> bool {
-    let password = match &ctx.args.password {
-        Some(password) => password,
-        None => {
-            tracing::warn!("admin password not set");
-            return false;
-        }
-    };
     let login = Login {
         username: Some(ctx.args.username.clone()),
-        password: Some(password.clone()),
+        password: Some(ctx.password.clone()),
     };
     bloglite_auth::is_logged_in(&ctx.salt, &login, jar)
 }
@@ -520,21 +515,9 @@ async fn post_login(
     jar: CookieJar,
     Form(form): Form<LoginForm>,
 ) -> Result<(CookieJar, Redirect), Response<Body>> {
-    let password = match &ctx.args.password {
-        Some(password) => password,
-        None => {
-            tracing::warn!("admin password not set");
-            return Err(response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                HeaderMap::new(),
-                "Admin password not set",
-                &ctx,
-            ));
-        }
-    };
     let actual = Login {
         username: Some(ctx.args.username.clone()),
-        password: Some(password.clone()),
+        password: Some(ctx.password.clone()),
     };
     let received = Login {
         username: Some(form.username),
@@ -845,13 +828,13 @@ async fn shutdown_signal() {
     tracing::info!("Shutdown signal received; finishing active requests");
 }
 
-pub async fn run(args: &ServeArgs) {
+pub async fn run(args: &ServeArgs, password: String) {
     let pool = data::connect(args).unwrap();
     let conn = pool.get().unwrap();
     data::init(args, &conn);
     let salt = obtain_salt(args, &conn);
     drop(conn);
-    let ctx = ServerContext::new(args.clone(), pool, salt).await;
+    let ctx = ServerContext::new(args.clone(), password, pool, salt).await;
     let app = app(ctx);
     // Listen on both IPv4 and IPv6. This seems to not be necessary behind the
     // Caddy reverse proxy for IPv6 to work, but could probably be useful for

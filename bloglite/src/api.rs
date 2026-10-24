@@ -31,13 +31,6 @@ async fn get_api(State(ctx): State<ServerContext>) -> Response<Body> {
 }
 
 fn is_authenticated(ctx: &ServerContext, headers: &HeaderMap) -> bool {
-    let password = &ctx.args.password;
-    let password = if let Some(password) = password {
-        password
-    } else {
-        tracing::warn!("admin password not set");
-        return false;
-    };
     let header = if let Some(cookie) = headers.get("Authorization") {
         cookie
     } else {
@@ -55,7 +48,7 @@ fn is_authenticated(ctx: &ServerContext, headers: &HeaderMap) -> bool {
         return false;
     }
     let token = parts[1];
-    token.as_bytes().ct_eq(password.as_bytes()).into()
+    token.as_bytes().ct_eq(ctx.password.as_bytes()).into()
 }
 
 fn error(ctx: &ServerContext, status: StatusCode, message: &str) -> Response<Body> {

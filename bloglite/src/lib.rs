@@ -32,6 +32,9 @@ pub struct ServeArgs {
     /// The password for the admin interface.
     #[arg(long, env = "BLOGLITE_PASSWORD")]
     pub password: Option<String>,
+    /// Read the admin password from this file, overriding --password and BLOGLITE_PASSWORD.
+    #[arg(long, env = "BLOGLITE_PASSWORD_FILE")]
+    pub password_file: Option<std::path::PathBuf>,
     /// The domain name of the website.
     #[arg(long, env = "BLOGLITE_DOMAIN", default_value = "")]
     pub domain: String,
@@ -65,4 +68,47 @@ pub struct ServeArgs {
         default_value = "backup.yml"
     )]
     pub trigger_workflow_id: String,
+}
+
+/// Read the admin password from file, env, or error when it fails.
+pub fn resolve_password(args: &ServeArgs) -> std::io::Result<String> {
+    let password = match &args.password_file {
+        Some(path) => {
+            if args.password.is_some() {
+                eprintln!(
+                    "Warning: --password or BLOGLITE_PASSWORD is set but will be ignored because a password file is configured"
+                );
+            }
+            let mut password = std::fs::read_to_string(path).map_err(|err| {
+                std::io::Error::new(
+                    err.kind(),
+                    format!("Could not read password file {}: {err}", path.display()),
+                )
+            })?;
+            // Remove a single Unix or Windows line ending, preserving other whitespace.
+            if password.ends_with('\n') {
+                password.pop();
+                if password.ends_with('\r') {
+                    password.pop();
+                }
+            }
+            password
+        }
+        None => match &args.password {
+            Some(password) => password.clone(),
+            None => {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Admin password not set",
+                ));
+            }
+        },
+    };
+    if password.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Admin password must not be empty",
+        ));
+    }
+    Ok(password)
 }

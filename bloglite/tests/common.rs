@@ -29,6 +29,7 @@ impl TestDefault for ServeArgs {
             html_lang: "en".to_string(),
             log_level: "info".to_string(),
             password: Some("test-password".to_string()),
+            password_file: None,
             domain: "".to_string(),
         }
     }
@@ -48,7 +49,8 @@ pub async fn server_context() -> ServerContext {
     let args = ServeArgs::test_default();
     let conn = DbPool::test_default();
     let salt = bloglite_auth::generate_salt();
-    ServerContext::new(args, conn, salt).await
+    let password = bloglite::resolve_password(&args).unwrap();
+    ServerContext::new(args, password, conn, salt).await
 }
 
 pub async fn request_body(uri: &str) -> (StatusCode, String) {

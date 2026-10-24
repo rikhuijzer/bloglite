@@ -54,6 +54,13 @@ async fn main() {
             println!("{}", license_content);
         }
         Task::Serve(serve_args) => {
+            let password = match bloglite::resolve_password(serve_args) {
+                Ok(password) => password,
+                Err(err) => {
+                    eprintln!("{err}");
+                    std::process::exit(1);
+                }
+            };
             let log_level = match serve_args.log_level.as_str() {
                 "error" => Level::ERROR,
                 "warn" => Level::WARN,
@@ -62,7 +69,7 @@ async fn main() {
                 _ => Level::INFO,
             };
             init_subscriber(log_level, args.ansi.unwrap_or(true)).unwrap();
-            bloglite::serve::run(serve_args).await;
+            bloglite::serve::run(serve_args, password).await;
         }
     }
 }

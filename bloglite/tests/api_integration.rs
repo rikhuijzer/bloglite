@@ -22,7 +22,7 @@ async fn test_api() {
 }
 
 fn auth_header(ctx: &ServerContext) -> String {
-    let auth = ctx.args.password.clone().unwrap();
+    let auth = ctx.password.clone();
     format!("Bearer {auth}")
 }
 
