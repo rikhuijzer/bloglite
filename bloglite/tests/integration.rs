@@ -83,11 +83,8 @@ async fn test_search_still_returns_matches() {
 async fn test_search_rejects_malformed_queries_and_recovers() {
     let mut ctx = server_context().await;
     // Reuse the same connection to verify that failed requests clean it up.
-    ctx.pool = r2d2::Pool::builder()
-        .max_size(1)
-        .build(r2d2_sqlite::SqliteConnectionManager::memory())
-        .unwrap();
-    bloglite::data::init(&ctx.args, &ctx.conn());
+    ctx.pool = bloglite::data::DbPool::memory(1).unwrap();
+    bloglite::data::init(&ctx.args, &ctx.conn().unwrap());
     let router = app(ctx.clone());
     for query in ["\"", "Lorem OR", "(Lorem", "unknown:Lorem"] {
         let query = serde_urlencoded::to_string([("q", query)]).unwrap();
@@ -102,7 +99,7 @@ async fn test_search_rejects_malformed_queries_and_recovers() {
         assert!(body.contains("Invalid search query syntax."));
         assert!(body.contains("<form action='/search'"));
 
-        let conn = ctx.conn();
+        let conn = ctx.conn().unwrap();
         assert!(conn.is_autocommit());
         let tables: i64 = conn
             .query_row(
@@ -132,7 +129,7 @@ async fn test_search_rejects_malformed_queries_and_recovers() {
 #[tokio::test]
 async fn test_search_database_failure_returns_server_error() {
     let ctx = server_context().await;
-    ctx.conn().execute("DROP TABLE posts", []).unwrap();
+    ctx.conn().unwrap().execute("DROP TABLE posts", []).unwrap();
     let req = Request::builder()
         .uri("/search?q=Lorem")
         .body(Body::empty())
@@ -143,7 +140,7 @@ async fn test_search_database_failure_returns_server_error() {
     let body = String::from_utf8(body.to_vec()).unwrap();
     assert!(body.contains("Search is temporarily unavailable."));
     assert!(!body.contains("no such table"));
-    assert!(ctx.conn().is_autocommit());
+    assert!(ctx.conn().unwrap().is_autocommit());
 }
 
 #[tokio::test]
@@ -179,11 +176,19 @@ async fn test_home_invalid_pages() {
 #[tokio::test]
 async fn test_home_pagination_and_stale_page() {
     let ctx = server_context().await;
-    ctx.conn().execute("DELETE FROM posts", []).unwrap();
+    ctx.conn()
+        .unwrap()
+        .execute("DELETE FROM posts", [])
+        .unwrap();
     let now = chrono::Utc::now();
     for index in 0..11 {
-        bloglite::data::Post::insert(&ctx.conn(), now, now, &format!("Pagination post {index}"))
-            .unwrap();
+        bloglite::data::Post::insert(
+            &ctx.conn().unwrap(),
+            now,
+            now,
+            &format!("Pagination post {index}"),
+        )
+        .unwrap();
     }
     let router = app(ctx.clone());
     for (uri, expected_count, has_next) in [("/", 10, true), ("/?page=2", 1, false)] {
@@ -196,6 +201,7 @@ async fn test_home_pagination_and_stale_page() {
         assert_eq!(body.contains("▶ next"), has_next);
     }
     ctx.conn()
+        .unwrap()
         .execute(
             "DELETE FROM posts WHERE id = (SELECT max(id) FROM posts)",
             [],
@@ -212,7 +218,10 @@ async fn test_home_pagination_and_stale_page() {
 #[tokio::test]
 async fn test_home_empty_database() {
     let ctx = server_context().await;
-    ctx.conn().execute("DELETE FROM posts", []).unwrap();
+    ctx.conn()
+        .unwrap()
+        .execute("DELETE FROM posts", [])
+        .unwrap();
     let router = app(ctx);
     for (uri, status) in [
         ("/", StatusCode::OK),
@@ -525,7 +534,10 @@ async fn test_rss() {
 async fn test_full_rss_pages() {
     let mut ctx = server_context().await;
     ctx.args.domain = "example.com".to_string();
-    ctx.conn().execute("DELETE FROM posts", []).unwrap();
+    ctx.conn()
+        .unwrap()
+        .execute("DELETE FROM posts", [])
+        .unwrap();
     let now = chrono::Utc::now();
     let content = format!(
         "# Full post\n\n{}\n\n**The end**\n\n<pre>  first\n\n    second</pre>\n\n<!-- ]]> -->",
@@ -534,10 +546,12 @@ async fn test_full_rss_pages() {
     let mut ids = Vec::new();
     for index in 0..41 {
         let created = now + chrono::Duration::seconds(index);
-        ids.push(bloglite::data::Post::insert(&ctx.conn(), created, created, &content).unwrap());
+        ids.push(
+            bloglite::data::Post::insert(&ctx.conn().unwrap(), created, created, &content).unwrap(),
+        );
     }
     // Deleted posts should not consume a page slot.
-    bloglite::data::Post::delete(&ctx.conn(), ids[20]).unwrap();
+    bloglite::data::Post::delete(&ctx.conn().unwrap(), ids[20]).unwrap();
     let router = app(ctx.clone());
     for (uri, count, previous, next, first_id, last_id) in [
         ("/feed.xml", 20, false, true, ids[40], ids[21]),
@@ -587,7 +601,10 @@ async fn test_full_rss_pages() {
             .unwrap();
         assert_eq!(router.clone().oneshot(req).await.unwrap().status(), status);
     }
-    ctx.conn().execute("DELETE FROM posts", []).unwrap();
+    ctx.conn()
+        .unwrap()
+        .execute("DELETE FROM posts", [])
+        .unwrap();
     let req = Request::builder()
         .uri("/feed.xml")
         .body(Body::empty())

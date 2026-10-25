@@ -3,18 +3,17 @@ use crate::data::Kv;
 use crate::html::PageSettings;
 use crate::html::Top;
 use crate::html::page;
+use crate::serve::RequestResult;
 use crate::serve::ServerContext;
 use crate::serve::is_logged_in;
 use crate::serve::not_found;
 use crate::serve::response;
 use axum::Router;
-use axum::body::Body;
 use axum::extract::Form;
 use axum::extract::Multipart;
 use axum::extract::Path;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::http::Response;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::routing::post;
@@ -199,12 +198,12 @@ fn show_file(file: &File) -> String {
     )
 }
 
-async fn get_files(State(ctx): State<ServerContext>, jar: CookieJar) -> Response<Body> {
+async fn get_files(State(ctx): State<ServerContext>, jar: CookieJar) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
     }
-    let files = File::list(&ctx.conn()).unwrap();
+    let files = File::list(&*ctx.conn()?).unwrap();
     let files = files
         .iter()
         .map(show_file)
@@ -255,12 +254,12 @@ async fn get_files(State(ctx): State<ServerContext>, jar: CookieJar) -> Response
     );
     let page_settings =
         PageSettings::new("Files", Some(is_logged_in), None, false, Top::GoHome, "");
-    let body = page(&ctx, &page_settings, &body).await;
+    let body = page(&ctx, &page_settings, &body).await?;
     tracing::info!("\"GET /files HTTP/1.1\" 200");
     response(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
 
-async fn get_file(State(ctx): State<ServerContext>, Path(sha): Path<String>) -> Response<Body> {
+async fn get_file(State(ctx): State<ServerContext>, Path(sha): Path<String>) -> RequestResult {
     // Anything after the sha is allowed. This allows anyone to decide the
     // filename. For security purposes, this should be okay since the only
     // person that can upload files is the site owner. The benefit of this is
@@ -271,7 +270,7 @@ async fn get_file(State(ctx): State<ServerContext>, Path(sha): Path<String>) -> 
     } else {
         sha.clone()
     };
-    let file = match File::get(&ctx.conn(), &name) {
+    let file = match File::get(&*ctx.conn()?, &name) {
         Ok(file) => file,
         Err(_) => return not_found(State(ctx)).await,
     };
@@ -288,7 +287,7 @@ async fn get_file(State(ctx): State<ServerContext>, Path(sha): Path<String>) -> 
 async fn get_file_with_filename(
     State(ctx): State<ServerContext>,
     Path((sha, _filename)): Path<(String, String)>,
-) -> Response<Body> {
+) -> RequestResult {
     get_file(State(ctx), Path(sha)).await
 }
 
@@ -296,7 +295,7 @@ async fn post_file(
     State(ctx): State<ServerContext>,
     jar: CookieJar,
     mut multipart: Multipart,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
@@ -339,7 +338,7 @@ async fn post_file(
             file.filename
         };
         let file = File::new(&file.mime_type, &filename, file.data);
-        File::insert(&ctx.conn(), &file).unwrap();
+        File::insert(&*ctx.conn()?, &file).unwrap();
     }
 
     crate::trigger::trigger_github_backup(&ctx).await;
@@ -350,17 +349,17 @@ async fn get_delete(
     State(ctx): State<ServerContext>,
     Path(sha): Path<String>,
     jar: CookieJar,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
     }
-    let file = File::get(&ctx.conn(), &sha);
+    let file = File::get(&*ctx.conn()?, &sha);
     let file = match file {
         Ok(file) => file,
         Err(_) => return not_found(State(ctx.clone())).await,
     };
-    let extra_head = &Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = &Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let title = format!("Delete: {}", file.filename);
     let settings = PageSettings::new(
         &title,
@@ -379,7 +378,7 @@ async fn get_delete(
             <br>
         </div>
     "#, file.filename};
-    let body = page(&ctx, &settings, &body).await;
+    let body = page(&ctx, &settings, &body).await?;
     response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
 
@@ -387,12 +386,12 @@ async fn post_delete(
     State(ctx): State<ServerContext>,
     Path(sha): Path<String>,
     jar: CookieJar,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
     }
-    File::delete(&ctx.conn(), &sha).unwrap();
+    File::delete(&*ctx.conn()?, &sha).unwrap();
     tracing::info!("\"POST /files/delete/{sha} HTTP/1.1\" 303");
     crate::trigger::trigger_github_backup(&ctx).await;
     crate::serve::see_other(&ctx, "/files")
@@ -402,17 +401,17 @@ async fn get_rename(
     State(ctx): State<ServerContext>,
     Path(sha): Path<String>,
     jar: CookieJar,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
     }
-    let file = File::get(&ctx.conn(), &sha);
+    let file = File::get(&*ctx.conn()?, &sha);
     let file = match file {
         Ok(file) => file,
         Err(_) => return not_found(State(ctx.clone())).await,
     };
-    let extra_head = &Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = &Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let title = format!("Rename: {}", file.filename);
     let settings = PageSettings::new(
         &title,
@@ -437,7 +436,7 @@ async fn get_rename(
             <br>
         </div>
     "#, file.filename, file.filename};
-    let body = page(&ctx, &settings, &body).await;
+    let body = page(&ctx, &settings, &body).await?;
     tracing::info!("\"GET /files/rename/{sha} HTTP/1.1\" 200");
     response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
@@ -452,13 +451,13 @@ async fn post_rename(
     Path(sha): Path<String>,
     jar: CookieJar,
     Form(rename_form): Form<RenameForm>,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
     }
     let filename = rename_form.filename;
-    File::rename(&ctx.conn(), &sha, &filename).unwrap();
+    File::rename(&*ctx.conn()?, &sha, &filename).unwrap();
     crate::trigger::trigger_github_backup(&ctx).await;
     crate::serve::see_other(&ctx, "/files")
 }

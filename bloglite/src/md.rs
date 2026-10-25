@@ -265,6 +265,11 @@ fn test_sanitize_preview() {
 }
 
 fn remove_urls(md: &str) -> String {
+    // Ordinary titles cannot match the link expression. Avoid compiling and
+    // running a regex for each title and slug on the page.
+    if !md.contains("](http://") && !md.contains("](https://") {
+        return md.to_string();
+    }
     // This will break on nested links, but commonmark does not support nested
     // links according to <https://spec.commonmark.org/0.31.2/#links>.
     let re = regex::Regex::new(r"\[(.*?)\]\(https?://.*?\)").unwrap();
@@ -439,7 +444,11 @@ fn test_description_interprets_markdown() {
 /// the content is converted to Markdown and texts such as `<p><a href` will end
 /// up in the slug
 pub fn extract_slug(post: &Post) -> String {
-    let title = extract_html_title(post);
+    slug_from_title(&extract_html_title(post))
+}
+
+/// Build a slug without extracting a title again when the caller already has it.
+pub fn slug_from_title(title: &str) -> String {
     let slug = title.replace(" ", "-");
     let slug = slug
         .replace(",", "-")

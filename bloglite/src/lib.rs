@@ -8,6 +8,7 @@ mod highlight;
 pub mod html;
 mod math;
 mod md;
+mod pool;
 mod search;
 pub mod serve;
 mod settings;

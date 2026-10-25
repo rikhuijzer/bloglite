@@ -1,5 +1,6 @@
 use crate::data::Kv;
 use crate::data::Post;
+use crate::serve::RequestResult;
 use crate::serve::ServerContext;
 use chrono::DateTime;
 use chrono::Duration;
@@ -443,11 +444,11 @@ fn test_minify_preserves_highlighted_code() {
     );
 }
 
-async fn about(ctx: &ServerContext, settings: &PageSettings) -> String {
-    let about = Kv::get(&ctx.conn(), "about").unwrap();
+async fn about(ctx: &ServerContext, settings: &PageSettings) -> RequestResult<String> {
+    let about = Kv::get(&*ctx.conn()?, "about").unwrap();
     let about = String::from_utf8(about).unwrap();
     let about = crate::md::content_to_html(&about);
-    let author_name = Kv::get(&ctx.conn(), "author_name").unwrap();
+    let author_name = Kv::get(&*ctx.conn()?, "author_name").unwrap();
     let author_name = String::from_utf8(author_name).unwrap();
     let style = "font-size: 0.8rem; padding-top: 0.1rem;";
     let admin_buttons = if settings.is_logged_in.unwrap_or(false) {
@@ -475,7 +476,7 @@ async fn about(ctx: &ServerContext, settings: &PageSettings) -> String {
         </a>&nbsp;
         "
     );
-    format!(
+    Ok(format!(
         "
     <div class='introduction' style='padding: 10px; {}'>
         <div style='{container_style}'>
@@ -496,7 +497,7 @@ async fn about(ctx: &ServerContext, settings: &PageSettings) -> String {
     </div>
     ",
         border_style(2),
-    )
+    ))
 }
 
 fn highlight_head(body: &str) -> &'static str {
@@ -507,13 +508,17 @@ fn highlight_head(body: &str) -> &'static str {
     }
 }
 
-pub async fn page(ctx: &ServerContext, settings: &PageSettings, body: &str) -> String {
-    let site_name = Kv::get(&ctx.conn(), "site_name").unwrap();
+pub async fn page(
+    ctx: &ServerContext,
+    settings: &PageSettings,
+    body: &str,
+) -> RequestResult<String> {
+    let site_name = Kv::get(&*ctx.conn()?, "site_name").unwrap();
     let site_name = String::from_utf8(site_name).unwrap();
     let site_name = escape_single_quote(&site_name);
     let description = match &settings.description {
         Some(description) => description.clone(),
-        None => Kv::get_or_empty_string(&ctx.conn(), "site_description"),
+        None => Kv::get_or_empty_string(&*ctx.conn()?, "site_description"),
     };
     let full_title = if settings.title.is_empty() {
         site_name.clone()
@@ -521,7 +526,7 @@ pub async fn page(ctx: &ServerContext, settings: &PageSettings, body: &str) -> S
         format!("{} - {site_name}", settings.title)
     };
     let about = if settings.show_about {
-        about(ctx, settings).await
+        about(ctx, settings).await?
     } else {
         "".to_string()
     };
@@ -565,7 +570,7 @@ pub async fn page(ctx: &ServerContext, settings: &PageSettings, body: &str) -> S
     } else {
         &settings.title
     };
-    let data_theme = Kv::get(&ctx.conn(), "dark_mode").unwrap();
+    let data_theme = Kv::get(&*ctx.conn()?, "dark_mode").unwrap();
     let data_theme = String::from_utf8(data_theme).unwrap();
     let data_theme = if data_theme == "on" {
         ""
@@ -608,10 +613,10 @@ pub async fn page(ctx: &ServerContext, settings: &PageSettings, body: &str) -> S
         </body>
         "#,
     };
-    minify(&page)
+    Ok(minify(&page))
 }
 
-pub async fn login(ctx: &ServerContext, error: Option<&str>) -> String {
+pub async fn login(ctx: &ServerContext, error: Option<&str>) -> RequestResult<String> {
     let top = Top::Homepage;
     let description = "Login to the website";
     let settings = PageSettings::new("Login", None, Some(description), false, top, "");
