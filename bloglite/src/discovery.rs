@@ -1,16 +1,15 @@
 //! Discovery protocols such as sitemap.xml, rss and robots.
 use crate::data::Post;
 use crate::files::File;
+use crate::serve::RequestResult;
 use crate::serve::ServerContext;
 use crate::serve::content_type;
 use crate::serve::response;
 use crate::settings::Settings;
 use axum::Router;
-use axum::body::Body;
 use axum::extract::Query;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::http::Response;
 use axum::http::StatusCode;
 use axum::routing::get;
 
@@ -83,8 +82,13 @@ fn feed_url(base: &str, page: usize) -> String {
     }
 }
 
-async fn rss(ctx: &ServerContext, posts: &[Post], page: usize, has_next: bool) -> String {
-    let settings = Settings::from_db(&ctx.conn()).unwrap();
+async fn rss(
+    ctx: &ServerContext,
+    posts: &[Post],
+    page: usize,
+    has_next: bool,
+) -> RequestResult<String> {
+    let settings = Settings::from_db(&*ctx.conn()?).unwrap();
     let site_name = escape_xml(&settings.site_name);
     let author_name = escape_xml(&settings.author_name);
     let base = ctx.base_url();
@@ -118,7 +122,7 @@ async fn rss(ctx: &ServerContext, posts: &[Post], page: usize, has_next: bool) -
     body.push_str("</channel>\n");
     body.push_str("</rss>\n");
     // Preserve whitespace in full post HTML, including preformatted text.
-    body
+    Ok(body)
 }
 
 #[derive(serde::Deserialize)]
@@ -129,8 +133,8 @@ struct FeedPagination {
 async fn get_rss(
     State(ctx): State<ServerContext>,
     Query(pagination): Query<FeedPagination>,
-) -> Response<Body> {
-    let posts = Post::list(&ctx.conn()).unwrap();
+) -> RequestResult {
+    let posts = Post::list(&*ctx.conn()?).unwrap();
     let page = pagination.page.unwrap_or(1);
     let page_size = 20;
     let Some(start) = page.checked_sub(1).and_then(|p| p.checked_mul(page_size)) else {
@@ -140,7 +144,7 @@ async fn get_rss(
         return crate::serve::not_found(State(ctx)).await;
     }
     let end = start.saturating_add(page_size).min(posts.len());
-    let body = rss(&ctx, &posts[start..end], page, end < posts.len()).await;
+    let body = rss(&ctx, &posts[start..end], page, end < posts.len()).await?;
     let mut headers = HeaderMap::new();
     // Forces download in Firefox unfortunately:
     // https://www.petefreitag.com/blog/content-type-xml-feeds/
@@ -148,7 +152,7 @@ async fn get_rss(
     response(StatusCode::OK, headers, body, &ctx)
 }
 
-async fn get_robots(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_robots(State(ctx): State<ServerContext>) -> RequestResult {
     let base = ctx.base_url();
     let sitemap_url = format!("{base}/sitemap.xml");
     let body = format!(
@@ -168,7 +172,7 @@ fn w3_datetime(dt: &chrono::DateTime<chrono::Utc>) -> String {
     dt.format("%Y-%m-%dT%H:%M:%SZ").to_string()
 }
 
-fn sitemap(ctx: &ServerContext, posts: &[Post]) -> String {
+fn sitemap(ctx: &ServerContext, posts: &[Post]) -> RequestResult<String> {
     let mut body = String::new();
     body.push_str(xml_header());
     body.push_str("<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
@@ -188,7 +192,7 @@ fn sitemap(ctx: &ServerContext, posts: &[Post]) -> String {
         );
         body.push_str(&entry);
     }
-    let files = File::list(&ctx.conn()).unwrap();
+    let files = File::list(&*ctx.conn()?).unwrap();
     for file in files {
         let sha = &file.sha;
         let filename = file.filename_without_prefix();
@@ -204,12 +208,12 @@ fn sitemap(ctx: &ServerContext, posts: &[Post]) -> String {
         body.push_str(&entry);
     }
     body.push_str("</urlset>\n");
-    crate::html::minify(&body)
+    Ok(crate::html::minify(&body))
 }
 
-async fn get_sitemap(State(ctx): State<ServerContext>) -> Response<Body> {
-    let posts = Post::list(&ctx.conn()).unwrap();
-    let body = sitemap(&ctx, &posts);
+async fn get_sitemap(State(ctx): State<ServerContext>) -> RequestResult {
+    let posts = Post::list(&*ctx.conn()?).unwrap();
+    let body = sitemap(&ctx, &posts)?;
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/xml");
     response(StatusCode::OK, headers, body, &ctx)

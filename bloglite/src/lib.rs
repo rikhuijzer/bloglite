@@ -7,6 +7,7 @@ pub mod health;
 mod highlight;
 pub mod html;
 mod md;
+mod pool;
 mod search;
 pub mod serve;
 mod settings;

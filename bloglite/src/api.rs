@@ -1,14 +1,13 @@
 //! API endpoints at `/api`.
 use crate::data::Post;
 use crate::files::File;
+use crate::serve::RequestResult;
 use crate::serve::ServerContext;
 use crate::serve::response;
 use crate::serve::response_json;
 use crate::settings::Settings;
 use axum::Router;
-use axum::body::Body;
 use axum::extract::State;
-use axum::http::Response;
 use axum::http::StatusCode;
 use axum::http::header::HeaderMap;
 use axum::http::header::HeaderValue;
@@ -21,7 +20,7 @@ use tar::Builder;
 use tar::Header;
 use xz2::read::XzEncoder;
 
-async fn get_api(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_api(State(ctx): State<ServerContext>) -> RequestResult {
     let domain = ctx.base_url();
     let body = json!({
         "download_all_url": format!("{domain}/api/download/all.tar.xz"),
@@ -51,7 +50,7 @@ fn is_authenticated(ctx: &ServerContext, headers: &HeaderMap) -> bool {
     token.as_bytes().ct_eq(ctx.password.as_bytes()).into()
 }
 
-fn error(ctx: &ServerContext, status: StatusCode, message: &str) -> Response<Body> {
+fn error(ctx: &ServerContext, status: StatusCode, message: &str) -> RequestResult {
     let body = json!({
         "status": status.as_u16(),
         "message": message,
@@ -60,7 +59,7 @@ fn error(ctx: &ServerContext, status: StatusCode, message: &str) -> Response<Bod
     response_json(status, body, ctx)
 }
 
-fn unauthorized(ctx: &ServerContext) -> Response<Body> {
+fn unauthorized(ctx: &ServerContext) -> RequestResult {
     error(ctx, StatusCode::UNAUTHORIZED, "unauthorized")
 }
 
@@ -129,8 +128,8 @@ fn compress(data: &[u8]) -> Vec<u8> {
     compressed
 }
 
-fn download_all(ctx: &ServerContext) -> Response<Body> {
-    let conn = ctx.conn();
+fn download_all(ctx: &ServerContext) -> RequestResult {
+    let conn = ctx.conn()?;
     let posts = Post::list(&conn);
     let posts = if let Ok(posts) = posts {
         posts
@@ -177,7 +176,7 @@ fn download_all(ctx: &ServerContext) -> Response<Body> {
     response::<Vec<u8>>(StatusCode::OK, headers, body, ctx)
 }
 
-async fn get_download_all(State(ctx): State<ServerContext>, headers: HeaderMap) -> Response<Body> {
+async fn get_download_all(State(ctx): State<ServerContext>, headers: HeaderMap) -> RequestResult {
     if !is_authenticated(&ctx, &headers) {
         return unauthorized(&ctx);
     }
@@ -193,11 +192,11 @@ async fn update_about(
     State(ctx): State<ServerContext>,
     headers: HeaderMap,
     body: String,
-) -> Response<Body> {
+) -> RequestResult {
     if !is_authenticated(&ctx, &headers) {
         return unauthorized(&ctx);
     }
-    let settings = Settings::from_db(&ctx.conn());
+    let settings = Settings::from_db(&*ctx.conn()?);
     if let Ok(settings) = settings {
         // Avoid update and backup trigger when no change to avoid infinite loop.
         if settings.about.trim() == body.trim() {
@@ -205,7 +204,7 @@ async fn update_about(
             return response_json(StatusCode::OK, "ok", &ctx);
         }
     }
-    let about = Settings::set_about(&ctx.conn(), &body);
+    let about = Settings::set_about(&*ctx.conn()?, &body);
     if let Err(e) = about {
         return error(
             &ctx,

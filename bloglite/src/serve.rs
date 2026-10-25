@@ -7,6 +7,7 @@ use crate::html::PageSettings;
 use crate::html::Top;
 use crate::html::page;
 use crate::html::wrap_post_content;
+use crate::pool::PooledConnection;
 use axum::Form;
 use axum::Router;
 use axum::body::Body;
@@ -28,11 +29,26 @@ use bloglite_auth::Login;
 use bloglite_auth::Salt;
 use chrono::Utc;
 use http_body_util::BodyExt;
-use r2d2::PooledConnection;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde::Serialize;
+
+pub type RequestResult<T = Response<Body>> = Result<T, DatabaseUnavailable>;
+
+#[derive(Debug)]
+pub struct DatabaseUnavailable;
+
+impl IntoResponse for DatabaseUnavailable {
+    fn into_response(self) -> Response<Body> {
+        // This response must not render the normal layout: that also needs SQLite.
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            [("Retry-After", "1"), ("Cache-Control", "no-store")],
+            "Server is busy. Please try again shortly.\n",
+        )
+            .into_response()
+    }
+}
 
 #[derive(Clone)]
 pub struct ServerContext {
@@ -51,8 +67,14 @@ impl ServerContext {
             salt,
         }
     }
-    pub fn conn(&self) -> PooledConnection<SqliteConnectionManager> {
-        self.pool.get().unwrap()
+    /// Request handlers fail with 503 if no connection becomes free within 250 ms.
+    pub fn conn(&self) -> RequestResult<PooledConnection> {
+        self.pool
+            .get_timeout(std::time::Duration::from_millis(250))
+            .map_err(|error| {
+                tracing::warn!(%error, "Database connection unavailable");
+                DatabaseUnavailable
+            })
     }
     /// Returns the base URL of the server.
     ///
@@ -75,7 +97,7 @@ pub fn response<D: Sized>(
     headers: HeaderMap,
     body: D,
     ctx: &ServerContext,
-) -> Response<Body>
+) -> RequestResult
 where
     Body: From<D>,
 {
@@ -93,7 +115,7 @@ where
         );
     }
     *response.body_mut() = Body::from(body);
-    response
+    Ok(response)
 }
 
 pub async fn error(
@@ -101,7 +123,7 @@ pub async fn error(
     status: StatusCode,
     title: &str,
     msg: &str,
-) -> Response<Body> {
+) -> RequestResult {
     let body = msg.to_string();
     let headers = HeaderMap::new();
     let settings = PageSettings::new(title, None, None, false, Top::GoHome, "");
@@ -113,11 +135,11 @@ pub async fn error(
         </div>
         "
     );
-    let body = page(ctx, &settings, &body).await;
+    let body = page(ctx, &settings, &body).await?;
     response(status, headers, body, ctx)
 }
 
-pub async fn internal_server_error(ctx: &ServerContext, msg: &str) -> Response<Body> {
+pub async fn internal_server_error(ctx: &ServerContext, msg: &str) -> RequestResult {
     error(
         ctx,
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -127,7 +149,7 @@ pub async fn internal_server_error(ctx: &ServerContext, msg: &str) -> Response<B
     .await
 }
 
-pub async fn unauthorized(ctx: &ServerContext) -> Response<Body> {
+pub async fn unauthorized(ctx: &ServerContext) -> RequestResult {
     error(
         ctx,
         StatusCode::UNAUTHORIZED,
@@ -137,7 +159,7 @@ pub async fn unauthorized(ctx: &ServerContext) -> Response<Body> {
     .await
 }
 
-pub fn response_json<D>(status: StatusCode, body: D, ctx: &ServerContext) -> Response<Body>
+pub fn response_json<D>(status: StatusCode, body: D, ctx: &ServerContext) -> RequestResult
 where
     D: serde::Serialize,
     Body: From<D>,
@@ -155,19 +177,26 @@ pub fn is_logged_in(ctx: &ServerContext, jar: &CookieJar) -> bool {
     bloglite_auth::is_logged_in(&ctx.salt, &login, jar)
 }
 
-async fn list_posts(ctx: &ServerContext, page: usize) -> Option<(bool, String)> {
-    let posts = match Post::list(&ctx.conn()) {
+async fn list_posts(ctx: &ServerContext, page: usize) -> RequestResult<Option<(bool, String)>> {
+    let posts = match Post::list(&*ctx.conn()?) {
         Ok(posts) => posts,
-        Err(_) => return Some((false, "Database error".to_string())),
+        Err(_) => return Ok(Some((false, "Database error".to_string()))),
     };
     // Set this to 1 to test the logic locally.
     let results_per_page = 10;
-    let start = page.checked_sub(1)?.checked_mul(results_per_page)?;
+    let Some(start) = page
+        .checked_sub(1)
+        .and_then(|p| p.checked_mul(results_per_page))
+    else {
+        return Ok(None);
+    };
     // The first page remains valid even when there are no posts.
     if page > 1 && start >= posts.len() {
-        return None;
+        return Ok(None);
     }
-    let end = start.checked_add(results_per_page)?;
+    let Some(end) = start.checked_add(results_per_page) else {
+        return Ok(None);
+    };
     let has_next = end < posts.len();
     let end = std::cmp::min(end, posts.len());
     let mut posts = posts[start..end].to_vec();
@@ -179,7 +208,7 @@ async fn list_posts(ctx: &ServerContext, page: usize) -> Option<(bool, String)> 
             wrap_post_content(post, &slug, true)
         })
         .collect::<Vec<String>>();
-    Some((has_next, posts.join("\n")))
+    Ok(Some((has_next, posts.join("\n"))))
 }
 
 #[derive(Debug, Deserialize)]
@@ -195,11 +224,11 @@ async fn get_posts(
     State(ctx): State<ServerContext>,
     jar: CookieJar,
     pagination: Query<Pagination>,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = Some(is_logged_in(&ctx, &jar));
     let show_about = pagination.page.is_none();
     let current_page = pagination.page.unwrap_or(1);
-    let extra_head = Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let extra_head = format!(
         "
         <meta property='og:type' content='website'/>
@@ -213,7 +242,7 @@ async fn get_posts(
         Top::GoHome
     };
     let settings = PageSettings::new("", is_logged_in, None, show_about, top, &extra_head);
-    let Some((has_next, posts)) = list_posts(&ctx, current_page).await else {
+    let Some((has_next, posts)) = list_posts(&ctx, current_page).await? else {
         return not_found(State(ctx)).await;
     };
     let prev_link = if current_page == 1 {
@@ -246,7 +275,7 @@ async fn get_posts(
         </div>
         "
     );
-    let body = page(&ctx, &settings, body).await;
+    let body = page(&ctx, &settings, body).await?;
     tracing::info!("\"GET / HTTP/1.1\" 200");
     response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
@@ -263,7 +292,7 @@ pub fn enable_caching(headers: &mut HeaderMap, max_age: u32) {
     headers.insert(axum::http::header::CACHE_CONTROL, val);
 }
 
-async fn get_style(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_style(State(ctx): State<ServerContext>) -> RequestResult {
     let body = crate::html::minify(include_str!("static/style.css"));
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/css");
@@ -271,7 +300,7 @@ async fn get_style(State(ctx): State<ServerContext>) -> Response<Body> {
     response(StatusCode::OK, headers, body, &ctx)
 }
 
-async fn get_script(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_script(State(ctx): State<ServerContext>) -> RequestResult {
     let body = crate::html::minify(include_str!("static/script.js"));
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/javascript");
@@ -279,7 +308,7 @@ async fn get_script(State(ctx): State<ServerContext>) -> Response<Body> {
     response(StatusCode::OK, headers, body, &ctx)
 }
 
-async fn get_katex(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_katex(State(ctx): State<ServerContext>) -> RequestResult {
     let body = crate::html::minify(include_str!("static/katex.js"));
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/javascript");
@@ -300,7 +329,7 @@ async fn get_highlight_style() -> impl IntoResponse {
     )
 }
 
-async fn get_nodefer(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_nodefer(State(ctx): State<ServerContext>) -> RequestResult {
     let body = crate::html::minify(include_str!("static/nodefer.js"));
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/javascript");
@@ -312,17 +341,17 @@ async fn get_delete(
     State(ctx): State<ServerContext>,
     Path(id): Path<i64>,
     jar: CookieJar,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return not_found(State(ctx.clone())).await;
     }
-    let post = Post::get(&ctx.conn(), id);
+    let post = Post::get(&*ctx.conn()?, id);
     let post = match post {
         Ok(post) => post,
         Err(_) => return not_found(State(ctx.clone())).await,
     };
-    let extra_head = &Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = &Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let title = crate::md::extract_html_title(&post);
     let settings = PageSettings::new(
         &title,
@@ -342,7 +371,7 @@ async fn get_delete(
         </div>
     "#};
     let body = format!("{}\n{}", delete_button, wrap_post_content(&post, "", false));
-    let body = page(&ctx, &settings, &body).await;
+    let body = page(&ctx, &settings, &body).await?;
     response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
 
@@ -350,9 +379,9 @@ async fn get_edit(
     State(ctx): State<ServerContext>,
     Path(id): Path<i64>,
     jar: CookieJar,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
-    let post = Post::get(&ctx.conn(), id);
+    let post = Post::get(&*ctx.conn()?, id);
     let post = match post {
         Ok(post) => post,
         Err(_) => return not_found(State(ctx)).await,
@@ -360,7 +389,7 @@ async fn get_edit(
     let title = crate::md::extract_html_title(&post);
     let title = format!("Edit '{title}'");
     let body = crate::html::edit_post_form(&post);
-    let extra_head = Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let settings = PageSettings::new(
         &title,
         Some(is_logged_in),
@@ -369,7 +398,7 @@ async fn get_edit(
         Top::GoBack,
         &extra_head,
     );
-    let body = page(&ctx, &settings, &body).await;
+    let body = page(&ctx, &settings, &body).await?;
     response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
 
@@ -381,9 +410,9 @@ async fn get_post_with_slug(
     State(ctx): State<ServerContext>,
     Path((id, _slug)): Path<(i64, String)>,
     jar: CookieJar,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
-    let post = Post::get(&ctx.conn(), id);
+    let post = Post::get(&*ctx.conn()?, id);
     let post = match post {
         Ok(post) => post,
         Err(_) => return not_found(State(ctx)).await,
@@ -392,14 +421,14 @@ async fn get_post_with_slug(
         return not_found(State(ctx)).await;
     }
     let title = crate::md::extract_html_title(&post);
-    let author = Kv::get(&ctx.conn(), "author_name").unwrap();
+    let author = Kv::get(&*ctx.conn()?, "author_name").unwrap();
     let author = String::from_utf8(author).unwrap();
     // Open Graph uses ISO 8601 according to <https://ogp.me/>.
     let created = iso8601(&post.created);
     let updated = iso8601(&post.updated);
     let slug = crate::md::extract_slug(&post);
     let canonical = format!("{}/posts/{}/{slug}", &ctx.base_url(), &post.id);
-    let extra_head = Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let extra_head = indoc::formatdoc! {r#"
         <meta property='article:author' content='{author}'/>
         <meta property='article:published_time' content='{created}'/>
@@ -422,7 +451,7 @@ async fn get_post_with_slug(
     if is_logged_in {
         body = format!("{}\n{body}", crate::html::edit_post_buttons(&ctx, &post));
     }
-    let body = page(&ctx, &settings, &body).await;
+    let body = page(&ctx, &settings, &body).await?;
     // Can safely assume HTTP/1.1 because we're not handling TLS.
     tracing::info!("\"GET /posts/{id} HTTP/1.1\" 200");
     response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
@@ -432,12 +461,12 @@ async fn get_post(
     State(ctx): State<ServerContext>,
     Path(id): Path<String>,
     jar: CookieJar,
-) -> Response<Body> {
+) -> RequestResult {
     let id = match id.parse::<i64>() {
         Ok(id) => id,
         Err(_) => return not_found(State(ctx)).await,
     };
-    let post = Post::get(&ctx.conn(), id);
+    let post = Post::get(&*ctx.conn()?, id);
     let post = match post {
         Ok(post) => post,
         Err(_) => return not_found(State(ctx)).await,
@@ -471,16 +500,16 @@ async fn get_post(
     response(StatusCode::PERMANENT_REDIRECT, headers, "", &ctx)
 }
 
-pub async fn not_found(State(ctx): State<ServerContext>) -> Response<Body> {
+pub async fn not_found(State(ctx): State<ServerContext>) -> RequestResult {
     let body = indoc::indoc! {"
         <div style='text-align: center; margin-top: 100px;'>
             <h1>Not found</h1>
             <p>The page you are looking for does not exist.</p>
         </div>
     "};
-    let extra_head = Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let settings = PageSettings::new("not found", None, None, false, Top::GoHome, &extra_head);
-    let body = page(&ctx, &settings, body).await;
+    let body = page(&ctx, &settings, body).await?;
     response::<String>(StatusCode::NOT_FOUND, HeaderMap::new(), body, &ctx)
 }
 
@@ -491,7 +520,7 @@ fn is_https(headers: &HeaderMap) -> bool {
     false
 }
 
-async fn get_login(State(ctx): State<ServerContext>, headers: HeaderMap) -> Response<Body> {
+async fn get_login(State(ctx): State<ServerContext>, headers: HeaderMap) -> RequestResult {
     let error = if ctx.args.production && !is_https(&headers) {
         Some(
             "Did not find X-Forwarded-Proto header which suggests the request is not over HTTPS. Login will probably fail. Use a reverse proxy like Caddy with HTTPS to fix this.",
@@ -499,7 +528,7 @@ async fn get_login(State(ctx): State<ServerContext>, headers: HeaderMap) -> Resp
     } else {
         None
     };
-    let body = crate::html::login(&ctx, error).await;
+    let body = crate::html::login(&ctx, error).await?;
     tracing::info!("\"GET /login HTTP/1.1\" 200");
     response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
@@ -514,7 +543,7 @@ async fn post_login(
     State(ctx): State<ServerContext>,
     jar: CookieJar,
     Form(form): Form<LoginForm>,
-) -> Result<(CookieJar, Redirect), Response<Body>> {
+) -> RequestResult {
     let actual = Login {
         username: Some(ctx.args.username.clone()),
         password: Some(ctx.password.clone()),
@@ -527,17 +556,17 @@ async fn post_login(
     match new_jar {
         Some(jar) => {
             tracing::info!("\"POST /login HTTP/1.1\" 200");
-            Ok((jar, Redirect::to("/")))
+            Ok((jar, Redirect::to("/")).into_response())
         }
         None => {
             let body = crate::html::login(&ctx, Some("Invalid username or password"));
             tracing::info!("\"POST /login HTTP/1.1\" 401");
-            Err(response::<String>(
+            response::<String>(
                 StatusCode::UNAUTHORIZED,
                 HeaderMap::new(),
-                body.await,
+                body.await?,
                 &ctx,
-            ))
+            )
         }
     }
 }
@@ -552,19 +581,19 @@ async fn post_delete(
     State(ctx): State<ServerContext>,
     Path(id): Path<i64>,
     jar: CookieJar,
-) -> Result<Redirect, Response<Body>> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
-        return Err(response(
+        return response(
             StatusCode::UNAUTHORIZED,
             HeaderMap::new(),
             "Unauthorized",
             &ctx,
-        ));
+        );
     }
-    Post::delete(&ctx.conn(), id).unwrap();
+    Post::delete(&*ctx.conn()?, id).unwrap();
     crate::trigger::trigger_github_backup(&ctx).await;
-    Ok(Redirect::to("/"))
+    Ok(Redirect::to("/").into_response())
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -577,7 +606,7 @@ pub struct EditPostForm {
 /// This is used after a `POST` request to indicate that the resource has been
 /// updated and the client should fetch the updated resource with a `GET`
 /// request.
-pub fn see_other(ctx: &ServerContext, url: &str) -> Response<Body> {
+pub fn see_other(ctx: &ServerContext, url: &str) -> RequestResult {
     let mut headers = HeaderMap::new();
     let dst = HeaderValue::from_str(url).unwrap();
     headers.insert("Location", dst);
@@ -594,12 +623,12 @@ async fn post_edit(
     jar: CookieJar,
     Path(id): Path<i64>,
     req: Request,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return not_found(State(ctx)).await;
     }
-    let extra_head = &Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = &Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let settings = PageSettings::new("", Some(is_logged_in), None, false, Top::GoBack, extra_head);
     let (_, body) = req.into_parts();
     let bytes = body
@@ -618,7 +647,7 @@ async fn post_edit(
     let input = String::from_utf8(bytes).unwrap();
     let publish = input.contains("publish=Publish");
     let form = serde_urlencoded::from_str::<EditPostForm>(&input).unwrap();
-    let created = match Post::get(&ctx.conn(), id) {
+    let created = match Post::get(&*ctx.conn()?, id) {
         Ok(post) => post.created,
         Err(_) => Utc::now(),
     };
@@ -629,7 +658,7 @@ async fn post_edit(
         content: trim_newline_suffix(&form.content),
     };
     if publish {
-        let post = post.update(&ctx.conn());
+        let post = post.update(&*ctx.conn()?);
         if post.is_err() {
             return response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -643,7 +672,7 @@ async fn post_edit(
         see_other(&ctx, &url)
     } else {
         let preview = crate::html::wrap_post_content(&post, "", false);
-        let body = page(&ctx, &settings, &preview).await;
+        let body = page(&ctx, &settings, &preview).await?;
         response(StatusCode::OK, HeaderMap::new(), body, &ctx)
     }
 }
@@ -679,16 +708,12 @@ fn test_fix_invalid_heading_issue_179_does_not_always_add_hash() {
     assert_eq!(fixed, "Heading");
 }
 
-async fn post_add(
-    State(ctx): State<ServerContext>,
-    jar: CookieJar,
-    req: Request,
-) -> Response<Body> {
+async fn post_add(State(ctx): State<ServerContext>, jar: CookieJar, req: Request) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return not_found(State(ctx)).await;
     }
-    let extra_head = &Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = &Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let settings = PageSettings::new("", Some(is_logged_in), None, false, Top::GoBack, extra_head);
     let (_, body) = req.into_parts();
     let bytes = body
@@ -711,7 +736,7 @@ async fn post_add(
         let now = Utc::now();
         let content = trim_newline_suffix(&form.content);
         let content = fix_invalid_heading_issue_179(&content);
-        let post_id = Post::insert(&ctx.conn(), now, now, &content);
+        let post_id = Post::insert(&*ctx.conn()?, now, now, &content);
         if let Err(_e) = post_id {
             return response(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -732,12 +757,12 @@ async fn post_add(
         };
         let is_front_page_preview = false;
         let preview = crate::html::wrap_post_content(&post, "", is_front_page_preview);
-        let body = page(&ctx, &settings, &preview).await;
+        let body = page(&ctx, &settings, &preview).await?;
         response(StatusCode::OK, HeaderMap::new(), body, &ctx)
     }
 }
 
-async fn get_webfinger(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_webfinger(State(ctx): State<ServerContext>) -> RequestResult {
     let body = crate::ap::webfinger(&ctx).await;
     let body = match body {
         Some(body) => body,

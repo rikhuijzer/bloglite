@@ -6,16 +6,15 @@ use crate::html::PageSettings;
 use crate::html::Top;
 use crate::html::page;
 use crate::html::wrap_post_content;
+use crate::serve::RequestResult;
 use crate::serve::ServerContext;
 use crate::serve::content_type;
 use crate::serve::is_logged_in;
 use crate::serve::response;
 use axum::Router;
-use axum::body::Body;
 use axum::extract::Query;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::http::Response;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum_extra::extract::CookieJar;
@@ -46,11 +45,10 @@ fn search_form(q: &str) -> String {
     )
 }
 
-async fn search(ctx: &ServerContext, q: &str) -> Result<Vec<Post>> {
+fn search(conn: &mut rusqlite::Connection, q: &str) -> Result<Vec<Post>> {
     if q.is_empty() {
         return Ok(vec![]);
     }
-    let mut conn = ctx.conn();
     // Dropping the transaction rolls back both the index and any failed query.
     let tx = conn.transaction()?;
 
@@ -99,11 +97,15 @@ async fn get_search(
     State(ctx): State<ServerContext>,
     jar: CookieJar,
     search_query: Query<SearchForm>,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     let q = search_query.q.clone().unwrap_or_default();
     let search_form = search_form(&q);
-    let (status, message, mut results) = match search(&ctx, &q).await {
+    let results = {
+        let mut conn = ctx.conn()?;
+        search(&mut conn, &q)
+    };
+    let (status, message, mut results) = match results {
         Ok(results) => (StatusCode::OK, "", results),
         Err(rusqlite::Error::SqliteFailure(_, Some(ref message)))
             if message == "unterminated string"
@@ -150,7 +152,7 @@ async fn get_search(
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/html");
     let title = "Search";
-    let extra_head = &Kv::get_or_empty_string(&ctx.conn(), "extra_head");
+    let extra_head = &Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let settings = PageSettings::new(
         title,
         Some(is_logged_in),
@@ -159,7 +161,7 @@ async fn get_search(
         Top::GoHome,
         extra_head,
     );
-    let body = page(&ctx, &settings, &body).await;
+    let body = page(&ctx, &settings, &body).await?;
     response(status, headers, body, &ctx)
 }
 
