@@ -3,15 +3,14 @@ use crate::data::cleanup_content;
 use crate::html::PageSettings;
 use crate::html::Top;
 use crate::html::page;
+use crate::serve::RequestResult;
 use crate::serve::ServerContext;
 use crate::serve::is_logged_in;
 use crate::serve::response;
 use axum::Form;
 use axum::Router;
-use axum::body::Body;
 use axum::extract::State;
 use axum::http::HeaderMap;
-use axum::http::Response;
 use axum::http::StatusCode;
 use axum::routing::get;
 use axum::routing::post;
@@ -115,12 +114,12 @@ pub fn text_input(
     )
 }
 
-async fn get_settings(State(ctx): State<ServerContext>, jar: CookieJar) -> Response<Body> {
+async fn get_settings(State(ctx): State<ServerContext>, jar: CookieJar) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
     }
-    let settings = match Settings::from_db(&ctx.conn()) {
+    let settings = match Settings::from_db(&*ctx.conn()?) {
         Ok(settings) => settings,
         Err(e) => {
             let msg = "Could not get settings from database";
@@ -211,7 +210,7 @@ async fn get_settings(State(ctx): State<ServerContext>, jar: CookieJar) -> Respo
     );
     let page_settings =
         PageSettings::new("Settings", Some(is_logged_in), None, false, Top::GoHome, "");
-    let body = page(&ctx, &page_settings, &body).await;
+    let body = page(&ctx, &page_settings, &body).await?;
     response(StatusCode::OK, HeaderMap::new(), body, &ctx)
 }
 
@@ -219,13 +218,13 @@ async fn post_settings(
     State(ctx): State<ServerContext>,
     jar: CookieJar,
     Form(form): Form<Settings>,
-) -> Response<Body> {
+) -> RequestResult {
     let is_logged_in = is_logged_in(&ctx, &jar);
     if !is_logged_in {
         return crate::serve::unauthorized(&ctx).await;
     }
     {
-        let conn = ctx.conn();
+        let conn = ctx.conn()?;
         Kv::insert(&conn, "site_name", form.site_name.trim().as_bytes()).unwrap();
         Kv::insert(
             &conn,

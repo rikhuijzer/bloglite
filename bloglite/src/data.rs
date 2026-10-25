@@ -202,7 +202,7 @@ pub fn connect(args: &ServeArgs) -> Result<DbPool> {
     if args.production {
         DbPool::open(&args.database_path, 4)
     } else {
-        DbPool::memory(10)
+        DbPool::memory(4)
     }
 }
 
