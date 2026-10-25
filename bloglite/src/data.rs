@@ -5,8 +5,6 @@ use chrono::DateTime;
 use chrono::NaiveDateTime;
 use chrono::TimeZone;
 use chrono::Utc;
-use r2d2::Pool;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use rusqlite::Result;
 
@@ -198,38 +196,14 @@ impl Post {
     }
 }
 
-pub type DbPool = Pool<SqliteConnectionManager>;
+pub use crate::pool::DbPool;
 
 pub fn connect(args: &ServeArgs) -> Result<DbPool> {
-    let pool = if args.production {
-        let path = &args.database_path;
-        let manager = SqliteConnectionManager::file(path);
-        let pool = r2d2::Pool::builder().max_size(4).build(manager).unwrap();
-        let conn = pool.get().unwrap();
-        match conn.pragma_update(None, "journal_mode", "WAL") {
-            Ok(_) => (),
-            Err(e) => {
-                tracing::error!("Failed to set journal mode to WAL: {}", e);
-            }
-        }
-        match conn.pragma_update(None, "busy_timeout", "5000") {
-            Ok(_) => (),
-            Err(e) => {
-                tracing::error!("Failed to set busy timeout: {}", e);
-            }
-        }
-        match conn.pragma_update(None, "synchronous", "NORMAL") {
-            Ok(_) => (),
-            Err(e) => {
-                tracing::error!("Failed to set synchronous mode to NORMAL: {}", e);
-            }
-        }
-        pool
+    if args.production {
+        DbPool::open(&args.database_path, 4)
     } else {
-        let manager = SqliteConnectionManager::memory();
-        r2d2::Pool::new(manager).unwrap()
-    };
-    Ok(pool)
+        DbPool::memory(10)
+    }
 }
 
 fn init_tables(conn: &Connection) {

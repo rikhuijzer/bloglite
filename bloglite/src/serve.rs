@@ -7,6 +7,7 @@ use crate::html::PageSettings;
 use crate::html::Top;
 use crate::html::page;
 use crate::html::wrap_post_content;
+use crate::pool::PooledConnection;
 use axum::Form;
 use axum::Router;
 use axum::body::Body;
@@ -28,8 +29,6 @@ use bloglite_auth::Login;
 use bloglite_auth::Salt;
 use chrono::Utc;
 use http_body_util::BodyExt;
-use r2d2::PooledConnection;
-use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use serde::Deserialize;
 use serde::Serialize;
@@ -51,7 +50,7 @@ impl ServerContext {
             salt,
         }
     }
-    pub fn conn(&self) -> PooledConnection<SqliteConnectionManager> {
+    pub fn conn(&self) -> PooledConnection {
         self.pool.get().unwrap()
     }
     /// Returns the base URL of the server.

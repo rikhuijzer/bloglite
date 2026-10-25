@@ -83,10 +83,7 @@ async fn test_search_still_returns_matches() {
 async fn test_search_rejects_malformed_queries_and_recovers() {
     let mut ctx = server_context().await;
     // Reuse the same connection to verify that failed requests clean it up.
-    ctx.pool = r2d2::Pool::builder()
-        .max_size(1)
-        .build(r2d2_sqlite::SqliteConnectionManager::memory())
-        .unwrap();
+    ctx.pool = bloglite::data::DbPool::memory(1).unwrap();
     bloglite::data::init(&ctx.args, &ctx.conn());
     let router = app(ctx.clone());
     for query in ["\"", "Lorem OR", "(Lorem", "unknown:Lorem"] {
