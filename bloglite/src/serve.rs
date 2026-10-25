@@ -426,7 +426,7 @@ async fn get_post_with_slug(
     // Open Graph uses ISO 8601 according to <https://ogp.me/>.
     let created = iso8601(&post.created);
     let updated = iso8601(&post.updated);
-    let slug = crate::md::extract_slug(&post);
+    let slug = crate::md::slug_from_title(&title);
     let canonical = format!("{}/posts/{}/{slug}", &ctx.base_url(), &post.id);
     let extra_head = Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let extra_head = indoc::formatdoc! {r#"
