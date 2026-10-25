@@ -5,11 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [3.1.0] - 2026-10-24
+
+### Added
+
+- Read the admin password from `BLOGLITE_PASSWORD_FILE` or `--password-file` ([#221](https://github.com/rikhuijzer/bloglite/issues/221)).
+
+### Changed
+
+- Require a non-empty admin password at startup.
+- Extend login sessions from two weeks to 30 days.
 
 ### Fixed
 
-- Include all posts in feed via Atom navigation links to older posts
+- Include all posts in the RSS feed via Atom navigation links to older posts ([#77](https://github.com/rikhuijzer/bloglite/issues/77)).
+- Extract plain text from Markdown for post descriptions ([#191](https://github.com/rikhuijzer/bloglite/issues/191)).
+- Shut down gracefully on `SIGTERM`
+- Show the package version with a custom-build or development label in the footer for non-release builds.
 
 ## [3.0.0] - 2026-10-17
 
@@ -264,6 +276,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix `\n` instead of newline in rss ([#65](https://github.com/rikhuijzer/bloglite/pull/65))
 
+[3.1.0]: https://github.com/rikhuijzer/bloglite/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/rikhuijzer/bloglite/compare/v2.1.0...v3.0.0
 [2.1.0]: https://github.com/rikhuijzer/bloglite/compare/v2.0.1...v2.1.0
 [2.0.1]: https://github.com/rikhuijzer/bloglite/compare/v2.0.0...v2.0.1
