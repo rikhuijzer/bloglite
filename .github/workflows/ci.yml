@@ -31,7 +31,22 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-test-${{ steps.rust-version.outputs.version }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}-
             ${{ runner.os }}-${{ runner.arch }}-test-${{ steps.rust-version.outputs.version }}-
-      - run: cargo install just --version 1.40.0 --locked
+      - name: Install jas
+        run: |
+          mkdir -p "$RUNNER_TEMP/jas"
+          cd "$RUNNER_TEMP/jas"
+          curl --fail --location --retry 2 \
+            https://github.com/rikhuijzer/jas/releases/download/v0.4.0/jas -o jas
+          sha="437b2988dbc58d5867b908bb67366b766b9bcd3ed4b266a129f8d96d75301f6e"
+          printf '%s  jas\n' "$sha" | sha256sum -c -
+          chmod +x jas
+          printf '%s\n' "$RUNNER_TEMP/jas" >> "$GITHUB_PATH"
+      - name: Install just
+        run: >
+          jas install
+          --gh casey/just@1.40.0
+          --sha d065d0df1a1f99529869fba8a5b3e0a25c1795b9007099b00dfabe29c7c1f7b6
+          --gh-token ${{ secrets.GITHUB_TOKEN }}
       - run: just test
 
   # Based on https://docs.docker.com/build/ci/github-actions/multi-platform/.
