@@ -1,1 +1,0 @@
-MathML CSS and LibertinusMath-Regular.woff2 are vendored from tmke8/math-core v0.7.0 (css/mathmlfixes.css and playground/fonts/). CSS license: mathml-LICENSE. Font license: LibertinusMath-OFL.txt, from tmke8/math-core-fonts/LibertinusMath. Keep these assets aligned when upgrading math-core.

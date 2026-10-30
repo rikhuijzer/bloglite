@@ -31,7 +31,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-test-${{ steps.rust-version.outputs.version }}-${{ hashFiles('**/Cargo.toml', 'Cargo.lock') }}-
             ${{ runner.os }}-${{ runner.arch }}-test-${{ steps.rust-version.outputs.version }}-
-      - run: cargo test --locked
+      - run: cargo install just --version 1.40.0 --locked
+      - run: just test
 
   # Based on https://docs.docker.com/build/ci/github-actions/multi-platform/.
   build:

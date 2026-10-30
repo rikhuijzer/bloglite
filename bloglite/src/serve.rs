@@ -234,7 +234,7 @@ async fn get_posts(
         <meta property='og:type' content='website'/>
         {}
         ",
-        &extra_head
+        extra_head
     );
     let top = if show_about {
         Top::Homepage
@@ -292,11 +292,11 @@ pub fn enable_caching(headers: &mut HeaderMap, max_age: u32) {
     headers.insert(axum::http::header::CACHE_CONTROL, val);
 }
 
-async fn get_style(State(ctx): State<ServerContext>) -> Response<Body> {
+async fn get_style(State(ctx): State<ServerContext>) -> RequestResult {
     let body = crate::html::minify(&format!(
         "{}\n{}",
         include_str!("static/style.css"),
-        include_str!("static/mathml.css")
+        include_str!("static/vendor/mathml.css")
     ));
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/css");
@@ -318,7 +318,7 @@ async fn get_math_font() -> impl IntoResponse {
             (axum::http::header::CONTENT_TYPE, "font/woff2"),
             (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
         ],
-        include_bytes!("static/LibertinusMath-Regular.woff2").as_slice(),
+        include_bytes!("static/vendor/LibertinusMath-Regular.woff2").as_slice(),
     )
 }
 
@@ -433,7 +433,7 @@ async fn get_post_with_slug(
     let created = iso8601(&post.created);
     let updated = iso8601(&post.updated);
     let slug = crate::md::slug_from_title(&title);
-    let canonical = format!("{}/posts/{}/{slug}", &ctx.base_url(), &post.id);
+    let canonical = format!("{}/posts/{}/{slug}", ctx.base_url(), post.id);
     let extra_head = Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let extra_head = indoc::formatdoc! {r#"
         <meta property='article:author' content='{author}'/>

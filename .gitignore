@@ -6,3 +6,6 @@ public/
 tmp*
 **/*.typ
 **/*.pdf
+
+# Downloaded by just static-assets; embedded in the binary at compile time.
+/bloglite/src/static/vendor/
