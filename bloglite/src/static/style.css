@@ -298,7 +298,21 @@ a.button {
     box-sizing: border-box;
 }
 
-.katex-display {
-    /* Is 1.2em by default, which makes display math too big. */
-    font-size: 1em !important;
+math {
+    font-family: "Libertinus Math", math;
+    font-size: 1em;
+}
+math[display="block"] {
+    margin: 1em 0;
+    overflow-x: auto;
+}
+mtext { font-family: inherit; }
+mtext .math-core-serif-font { font-family: serif; }
+mtext .math-core-sans-serif-font { font-family: sans-serif; }
+mtext code { font-family: monospace; }
+
+@font-face {
+    font-family: "Libertinus Math";
+    src: url('/static/LibertinusMath-Regular.woff2') format('woff2');
+    font-display: swap;
 }

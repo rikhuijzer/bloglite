@@ -85,7 +85,7 @@ fn node_to_html(node: &Node) -> String {
                 <pre><code class="language-math math-display">{}
                 </code></pre>
                 "#,
-                math.value
+                crate::highlight::escape(&math.value)
             ));
         }
         Node::Table(table) => {
@@ -116,7 +116,7 @@ fn node_to_html(node: &Node) -> String {
             preview.push_str(&format!("<code>{}</code>", inline_code.value));
         }
         Node::InlineMath(inline_math) => {
-            let value = &inline_math.value;
+            let value = crate::highlight::escape(&inline_math.value);
             preview.push_str(&format!("<code class=\"language-math\">{value}</code>"));
         }
         Node::List(list) => {
@@ -156,10 +156,7 @@ fn node_to_html(node: &Node) -> String {
 fn parse_options() -> ParseOptions {
     let mut options = ParseOptions::default();
     options.constructs.gfm_table = true;
-    // KaTeX does not exactly match CommonMark, so we parse math to HTML and
-    // then figure out how to render the produced code blocks in Javascript.
-    // Note that this also makes it easy to detect whether a post contains math,
-    // and thus easy to decide whether to load KaTeX.
+    // Parse math separately from code so it can be rendered to MathML.
     options.constructs.math_flow = true;
     options.constructs.math_text = true;
     options.constructs.gfm_footnote_definition = true;
@@ -176,7 +173,9 @@ fn to_html_options() -> Options {
 
 pub fn content_to_html(content: &str) -> String {
     let options = to_html_options();
-    crate::highlight::html(&markdown::to_html_with_options(content, &options).unwrap())
+    crate::math::html(&crate::highlight::html(
+        &markdown::to_html_with_options(content, &options).unwrap(),
+    ))
 }
 
 /// Prepare post to be shown as preview.
@@ -203,7 +202,7 @@ pub fn preview(post: &mut Post, max_length: usize) {
         }
         preview.push_str(&node_to_html(node));
     }
-    post.content = crate::highlight::html(&preview);
+    post.content = crate::math::html(&crate::highlight::html(&preview));
 }
 
 #[test]

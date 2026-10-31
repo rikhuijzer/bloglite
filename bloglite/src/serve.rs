@@ -234,7 +234,7 @@ async fn get_posts(
         <meta property='og:type' content='website'/>
         {}
         ",
-        &extra_head
+        extra_head
     );
     let top = if show_about {
         Top::Homepage
@@ -293,7 +293,11 @@ pub fn enable_caching(headers: &mut HeaderMap, max_age: u32) {
 }
 
 async fn get_style(State(ctx): State<ServerContext>) -> RequestResult {
-    let body = crate::html::minify(include_str!("static/style.css"));
+    let body = crate::html::minify(&format!(
+        "{}\n{}",
+        include_str!("static/style.css"),
+        include_str!("static/vendor/mathml.css")
+    ));
     let mut headers = HeaderMap::new();
     content_type(&mut headers, "text/css");
     enable_caching(&mut headers, 600);
@@ -308,12 +312,14 @@ async fn get_script(State(ctx): State<ServerContext>) -> RequestResult {
     response(StatusCode::OK, headers, body, &ctx)
 }
 
-async fn get_katex(State(ctx): State<ServerContext>) -> RequestResult {
-    let body = crate::html::minify(include_str!("static/katex.js"));
-    let mut headers = HeaderMap::new();
-    content_type(&mut headers, "text/javascript");
-    enable_caching(&mut headers, 600);
-    response(StatusCode::OK, headers, body, &ctx)
+async fn get_math_font() -> impl IntoResponse {
+    (
+        [
+            (axum::http::header::CONTENT_TYPE, "font/woff2"),
+            (axum::http::header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        include_bytes!("static/vendor/LibertinusMath-Regular.woff2").as_slice(),
+    )
 }
 
 async fn get_highlight_style() -> impl IntoResponse {
@@ -427,7 +433,7 @@ async fn get_post_with_slug(
     let created = iso8601(&post.created);
     let updated = iso8601(&post.updated);
     let slug = crate::md::slug_from_title(&title);
-    let canonical = format!("{}/posts/{}/{slug}", &ctx.base_url(), &post.id);
+    let canonical = format!("{}/posts/{}/{slug}", ctx.base_url(), post.id);
     let extra_head = Kv::get_or_empty_string(&*ctx.conn()?, "extra_head");
     let extra_head = indoc::formatdoc! {r#"
         <meta property='article:author' content='{author}'/>
@@ -794,8 +800,8 @@ pub fn app(ctx: ServerContext) -> Router {
         .route("/logout", get(get_logout))
         .route("/static/highlight.css", get(get_highlight_style))
         .route("/static/style.css", get(get_style))
+        .route("/static/LibertinusMath-Regular.woff2", get(get_math_font))
         .route("/static/script.js", get(get_script))
-        .route("/static/katex.js", get(get_katex))
         .route("/static/nodefer.js", get(get_nodefer))
         .route("/.well-known/webfinger", get(get_webfinger));
     let router = crate::api::routes(&router);

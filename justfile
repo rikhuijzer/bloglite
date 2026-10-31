@@ -36,7 +36,7 @@ tag:
 # Build release and copy files to public/
 #
 # The copy might speed up Docker builds due to fewer files in the context.
-release:
+release: static-assets
     #!{{shebang}}
 
     rm -rf public
@@ -62,6 +62,8 @@ release:
     export "CARGO_TARGET_${TARGET_ENV^^}_LINKER=musl-gcc"
     cargo build -p bloglite --release --locked --target="$TARGET"
     cp --verbose "target/$TARGET/release/bloglite" "public/"
+    mkdir -p public/licenses
+    cp bloglite/src/static/vendor/mathml-LICENSE bloglite/src/static/vendor/LibertinusMath-OFL.txt public/licenses/
 
     # The static runtime has no dynamic loader or shared libraries.
     readelf --program-headers public/bloglite > public/program-headers.txt
@@ -76,6 +78,7 @@ release:
     FROM gcr.io/distroless/static-debian13
     ENV BLOGLITE_PRODUCTION="true"
     COPY bloglite /
+    COPY licenses /licenses
     CMD ["/bloglite", "serve"]
     EOF
 
@@ -84,7 +87,47 @@ release:
     # To avoid accidentally editing the files in public manually.
     chmod 444 public/Dockerfile
 
-serve:
+serve: static-assets
     #!{{shebang}}
 
     cargo watch -x "run -- serve --password=test-password"
+
+# Fetch and verify third-party math assets (cached locally).
+static-assets:
+    #!{{shebang}}
+
+    # math-core v0.7.0 assets; checksums pin the exact bytes.
+    asset_dir="bloglite/src/static/vendor"
+    mkdir -p "$asset_dir"
+    asset_tmp="$(mktemp -d "$asset_dir/.download.XXXXXX")"
+    trap 'rm -rf "$asset_tmp"' EXIT
+
+    checksum() {
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$1" | cut -d ' ' -f 1
+        else
+            shasum -a 256 "$1" | cut -d ' ' -f 1
+        fi
+    }
+
+    while read -r expected name url; do
+        if [[ -f "$asset_dir/$name" ]] && [[ "$(checksum "$asset_dir/$name")" == "$expected" ]]; then
+            continue
+        fi
+        printf 'Downloading %s\n' "$name"
+        curl --fail --location --retry 2 --connect-timeout 15 --max-time 120 "$url" -o "$asset_tmp/$name"
+        if [[ "$(checksum "$asset_tmp/$name")" != "$expected" ]]; then
+            printf 'Checksum mismatch for %s\n' "$name" >&2
+            exit 1
+        fi
+        mv "$asset_tmp/$name" "$asset_dir/$name"
+    done <<'ASSETS'
+    82338364c78cdb5c14301bb44efd3e25dfb4b236217d20c7df833e44888b8a3f mathml.css https://raw.githubusercontent.com/tmke8/math-core/v0.7.0/css/mathmlfixes.css
+    4522db391501c9fde3553b377a9cec8bdd05eb80dd0bb3df51d9e44c3e4c8f2f mathml-LICENSE https://raw.githubusercontent.com/tmke8/math-core/v0.7.0/LICENSE
+    6510228cbca8ce1485d7de9078830c5096d4c35fcce3fea8b923caf6b3f091d9 LibertinusMath-Regular.woff2 https://raw.githubusercontent.com/tmke8/math-core/v0.7.0/playground/fonts/LibertinusMath-Regular.woff2
+    9aeecc8107c489ec1ec0068b0313e531a760edf3493705b32ab8ab8215a8794e LibertinusMath-OFL.txt https://raw.githubusercontent.com/tmke8/math-core-fonts/main/LibertinusMath/OFL.txt
+    ASSETS
+
+# Test after preparing the assets required by include_str!/include_bytes!.
+test: static-assets
+    cargo test --workspace --locked
