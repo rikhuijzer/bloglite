@@ -426,7 +426,19 @@ async fn get_post_with_slug(
     if post.is_deleted() {
         return not_found(State(ctx)).await;
     }
-    let title = crate::md::extract_html_title(&post);
+    let result = render_post(&ctx, &post, Some(is_logged_in), "").await?;
+    // Can safely assume HTTP/1.1 because we're not handling TLS.
+    tracing::info!("\"GET /posts/{id} HTTP/1.1\" 200");
+    Ok(result)
+}
+
+pub(crate) async fn render_post(
+    ctx: &ServerContext,
+    post: &Post,
+    is_logged_in: Option<bool>,
+    additional_head: &str,
+) -> RequestResult {
+    let title = crate::md::extract_html_title(post);
     let author = Kv::get(&*ctx.conn()?, "author_name").unwrap();
     let author = String::from_utf8(author).unwrap();
     // Open Graph uses ISO 8601 according to <https://ogp.me/>.
@@ -442,25 +454,23 @@ async fn get_post_with_slug(
         <meta property='og:url' content='{canonical}'/>
         <meta property='og:type' content='article'/>
         <link rel='canonical' href='{canonical}'/>
-        {}
+        {}{additional_head}
     "#, &extra_head};
-    let description = crate::md::extract_html_description(&post);
+    let description = crate::md::extract_html_description(post);
     let settings = PageSettings::new(
         &title,
-        Some(is_logged_in),
+        is_logged_in,
         Some(&description),
         false,
         Top::GoHome,
         &extra_head,
     );
-    let mut body = wrap_post_content(&post, &slug, false);
-    if is_logged_in {
-        body = format!("{}\n{body}", crate::html::edit_post_buttons(&ctx, &post));
+    let mut body = wrap_post_content(post, &slug, false);
+    if is_logged_in == Some(true) {
+        body = format!("{}\n{body}", crate::html::edit_post_buttons(ctx, post));
     }
-    let body = page(&ctx, &settings, &body).await?;
-    // Can safely assume HTTP/1.1 because we're not handling TLS.
-    tracing::info!("\"GET /posts/{id} HTTP/1.1\" 200");
-    response::<String>(StatusCode::OK, HeaderMap::new(), body, &ctx)
+    let body = page(ctx, &settings, &body).await?;
+    response::<String>(StatusCode::OK, HeaderMap::new(), body, ctx)
 }
 
 async fn get_post(
@@ -700,6 +710,10 @@ fn fix_invalid_heading_issue_179(content: &str) -> String {
     format!("#{}", &content[number_of_hashes..])
 }
 
+pub(crate) fn prepare_new_post_content(content: &str) -> String {
+    fix_invalid_heading_issue_179(&trim_newline_suffix(content))
+}
+
 #[test]
 fn test_fix_invalid_heading_issue_179_reduces() {
     let content = "### Heading";
@@ -740,8 +754,7 @@ async fn post_add(State(ctx): State<ServerContext>, jar: CookieJar, req: Request
     let form = serde_urlencoded::from_str::<AddPostForm>(&input).unwrap();
     if publish {
         let now = Utc::now();
-        let content = trim_newline_suffix(&form.content);
-        let content = fix_invalid_heading_issue_179(&content);
+        let content = prepare_new_post_content(&form.content);
         let post_id = Post::insert(&*ctx.conn()?, now, now, &content);
         if let Err(_e) = post_id {
             return response(
@@ -783,8 +796,17 @@ async fn get_webfinger(State(ctx): State<ServerContext>) -> RequestResult {
     response::<String>(StatusCode::OK, headers, body, &ctx)
 }
 
+pub(crate) fn static_routes() -> Router<ServerContext> {
+    Router::new()
+        .route("/static/highlight.css", get(get_highlight_style))
+        .route("/static/style.css", get(get_style))
+        .route("/static/LibertinusMath-Regular.woff2", get(get_math_font))
+        .route("/static/script.js", get(get_script))
+        .route("/static/nodefer.js", get(get_nodefer))
+}
+
 pub fn app(ctx: ServerContext) -> Router {
-    let router = Router::new()
+    let router = static_routes()
         .route("/", get(get_posts))
         .route("/posts/delete/{id}", get(get_delete))
         .route("/posts/delete/{id}", post(post_delete))
@@ -798,11 +820,6 @@ pub fn app(ctx: ServerContext) -> Router {
         .route("/login", get(get_login))
         .route("/login", post(post_login))
         .route("/logout", get(get_logout))
-        .route("/static/highlight.css", get(get_highlight_style))
-        .route("/static/style.css", get(get_style))
-        .route("/static/LibertinusMath-Regular.woff2", get(get_math_font))
-        .route("/static/script.js", get(get_script))
-        .route("/static/nodefer.js", get(get_nodefer))
         .route("/.well-known/webfinger", get(get_webfinger));
     let router = crate::api::routes(&router);
     let router = crate::discovery::routes(&router);
@@ -836,7 +853,7 @@ fn obtain_salt(args: &ServeArgs, conn: &Connection) -> Salt {
     }
 }
 
-async fn shutdown_signal() {
+pub(crate) async fn shutdown_signal() {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await

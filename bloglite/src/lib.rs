@@ -9,6 +9,7 @@ pub mod html;
 mod math;
 mod md;
 mod pool;
+pub mod preview;
 mod search;
 pub mod serve;
 mod settings;

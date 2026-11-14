@@ -92,6 +92,13 @@ serve: static-assets
 
     cargo watch -x "run -- serve --password=test-password"
 
+# Preview a Markdown draft.
+[positional-arguments]
+preview *args: static-assets
+    #!{{shebang}}
+
+    exec cargo run --locked -p bloglite -- preview "$@"
+
 # Fetch and verify third-party math assets (cached locally).
 static-assets:
     #!{{shebang}}
