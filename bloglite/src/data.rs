@@ -220,13 +220,8 @@ fn init_kv_data(conn: &Connection, key: &str, value: &[u8]) {
     }
 }
 
-fn init_data(args: &ServeArgs, conn: &Connection) {
+pub(crate) fn init_site_settings(conn: &Connection, about: &str, domain: &str) {
     init_kv_data(conn, SITE_NAME_KEY, b"John's Weblog");
-    let about = if args.production {
-        ""
-    } else {
-        "About [example](https://example.com)"
-    };
     init_kv_data(
         conn,
         "site_description",
@@ -238,9 +233,15 @@ fn init_data(args: &ServeArgs, conn: &Connection) {
     init_kv_data(conn, "dark_mode", b"off");
     init_kv_data(conn, "extra_head", extra_head.as_bytes());
 
-    let domain = if args.production { "" } else { "localhost" };
     init_kv_data(conn, "domain", domain.as_bytes());
+}
 
+fn init_data(args: &ServeArgs, conn: &Connection) {
+    if args.production {
+        init_site_settings(conn, "", "");
+    } else {
+        init_site_settings(conn, "About [example](https://example.com)", "localhost");
+    }
     if !args.production {
         let now = chrono::Utc::now();
         let content = "[Lorem](https://example.com/lorem) ipsum ut enim ad \

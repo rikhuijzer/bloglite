@@ -11,6 +11,17 @@ enum Task {
     CheckHealth(HealthArgs),
     /// Print the project's license.
     License,
+    /// Preview a local Markdown draft and refresh when it changes.
+    Preview {
+        /// Path to the Markdown draft.
+        draft: std::path::PathBuf,
+        /// Local port (use 0 to pick a free port).
+        #[arg(long, default_value_t = 3000)]
+        port: u16,
+        /// Live blog host for /files/ URLs (defaults to HTTPS).
+        #[arg(long)]
+        host: Option<String>,
+    },
     /// Start the server.
     Serve(ServeArgs),
 }
@@ -52,6 +63,12 @@ async fn main() {
         Task::License => {
             let license_content = include_str!("../../LICENSE");
             println!("{}", license_content);
+        }
+        Task::Preview { draft, port, host } => {
+            if let Err(err) = bloglite::preview::run(draft.clone(), *port, host.as_deref()).await {
+                eprintln!("{err}");
+                std::process::exit(1);
+            }
         }
         Task::Serve(serve_args) => {
             let password = match bloglite::resolve_password(serve_args) {

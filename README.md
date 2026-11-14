@@ -86,6 +86,29 @@ For the full list of `BLOGLITE_` environment variables, see [bloglite/src/lib.rs
 Regarding the health check, Docker Compose does not restart containers when it fails.
 To make that happen, you can write your own CRON job script to check for failures, or use [autoheal](https://github.com/willfarrell/docker-autoheal).
 
+## Local draft preview
+
+Write a post in any editor and run `bloglite preview draft.md`. From this
+repository, use `just preview draft.md` to prepare the assets and run the preview.
+
+Open the URL printed by the command. The page uses bloglite's article layout,
+syntax highlighting, and math rendering, and refreshes whenever you save the
+file. Specify a port via `--port` if port 3000 is already in use.
+
+The preview uses default site settings. Pass `--host` to load images and other
+`/files/` links from your live blog.
+
+```sh
+git clone https://github.com/rikhuijzer/bloglite.git
+
+cd bloglite/
+
+just preview --host blog.example.com tmp.md
+```
+
+When the draft is ready, paste it into your blog's
+composer to publish it.
+
 ## Syndication
 
 To share a post, you can either get the URL from the navigation bar or you can copy the longer link that is available below each post.
