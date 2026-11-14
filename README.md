@@ -93,17 +93,20 @@ repository, use `just preview draft.md` to prepare the assets and run the previe
 
 Open the URL printed by the command. The page uses bloglite's article layout,
 syntax highlighting, and math rendering, and refreshes whenever you save the
-file. Use `--port 0` if port 3000 is already in use.
+file. Specify a port via `--port` if port 3000 is already in use.
 
 The preview uses default site settings. Pass `--host` to load images and other
 `/files/` links from your live blog.
 
 ```sh
-just preview --host blog.example.com draft.md
+git clone https://github.com/rikhuijzer/bloglite.git
+
+cd bloglite/
+
+just preview --host blog.example.com tmp.md
 ```
 
-A bare hostname uses HTTPS. You can also pass a full origin such as
-`http://localhost:8080`. When the draft is ready, paste it into your blog's
+When the draft is ready, paste it into your blog's
 composer to publish it.
 
 ## Syndication
